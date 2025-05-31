@@ -42,6 +42,7 @@
       padding: 5px 10px;
       border-radius: 4px;
       font-size: 12px;
+      z-index: 10;
     }
     .video-feed video, .generated-image img {
       width: 100%;
@@ -97,6 +98,45 @@
       right: 10px;
       z-index: 1000;
     }
+    .progress-container {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background-color: rgba(0,0,0,0.5);
+      color: white;
+      padding: 8px;
+      font-size: 12px;
+      z-index: 10;
+    }
+    .progress-bar {
+      height: 4px;
+      background-color: #28a745;
+      width: 0%;
+      transition: width 0.3s ease;
+      margin-top: 4px;
+    }
+    .model-card {
+      border: 1px solid #dee2e6;
+      border-radius: 8px;
+      padding: 10px;
+      margin-bottom: 10px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+    .model-card:hover {
+      border-color: #007bff;
+      background-color: #f8f9fa;
+    }
+    .model-card.selected {
+      border-color: #28a745;
+      background-color: #d4edda;
+    }
+    .server-info {
+      font-size: 12px;
+      color: #6c757d;
+      margin-top: 10px;
+    }
     @media (max-width: 1100px) {
       .feed-container {
         flex-direction: column;
@@ -128,6 +168,10 @@
       <div class="generated-image">
         <span class="feed-label">Generated</span>
         <img id="generatedImage" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=">
+        <div id="progressContainer" class="progress-container" style="display:none;">
+          <div id="progressText">Initializing...</div>
+          <div class="progress-bar" id="progressBar"></div>
+        </div>
       </div>
     </div>
 
@@ -138,10 +182,24 @@
           <select id="cameraSelect" class="form-select"></select>
         </div>
         <div class="col-md-6">
-          <label for="modelSelect" class="form-label">Model</label>
-          <select id="modelSelect" class="form-select">
-            <option value="offline_mode">Offline Mode</option>
-          </select>
+          <label class="form-label">Connection</label>
+          <div class="input-group">
+            <span class="input-group-text">API URL</span>
+            <input type="text" id="apiUrlInput" class="form-control" value="http://localhost:8000">
+            <button class="btn btn-outline-primary" id="connectButton">Connect</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Model selection row -->
+      <div class="row mb-3">
+        <div class="col-12">
+          <label class="form-label">Model</label>
+          <div id="modelCards" class="row g-2">
+            <div class="col-12">
+              <div class="alert alert-info">Loading models...</div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -193,8 +251,21 @@
         </div>
         <div class="col-md-4">
           <div class="input-group">
-            <span class="input-group-text">API URL</span>
-            <input type="text" id="apiUrlInput" class="form-control" value="http://localhost:8000">
+            <span class="input-group-text">Interval</span>
+            <select id="intervalSelect" class="form-select">
+              <option value="1000">1 sec</option>
+              <option value="1500" selected>1.5 sec</option>
+              <option value="2000">2 sec</option>
+              <option value="3000">3 sec</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div class="row mt-3">
+        <div class="col-12">
+          <div id="serverInfo" class="server-info">
+            Server information will appear here when connected...
           </div>
         </div>
       </div>
@@ -213,7 +284,7 @@
     const generatedImage = document.getElementById('generatedImage');
     const canvas = document.getElementById('captureCanvas');
     const cameraSelect = document.getElementById('cameraSelect');
-    const modelSelect = document.getElementById('modelSelect');
+    const modelCards = document.getElementById('modelCards');
     const promptInput = document.getElementById('promptInput');
     const negativePromptInput = document.getElementById('negativePromptInput');
     const stepsSlider = document.getElementById('stepsSlider');
@@ -228,6 +299,12 @@
     const apiStatusBadge = document.getElementById('apiStatusBadge');
     const suggestButton = document.getElementById('suggestButton');
     const promptSuggestions = document.getElementById('promptSuggestions');
+    const progressContainer = document.getElementById('progressContainer');
+    const progressBar = document.getElementById('progressBar');
+    const progressText = document.getElementById('progressText');
+    const connectButton = document.getElementById('connectButton');
+    const intervalSelect = document.getElementById('intervalSelect');
+    const serverInfo = document.getElementById('serverInfo');
 
     // App State
     let isRunning = false;
@@ -236,6 +313,9 @@
     let processingInterval = null;
     let apiCheckInterval = null;
     let cameraStream = null;
+    let selectedModel = "offline_mode";
+    let websocket = null;
+    let websocketReconnectTimer = null;
 
     // Helper Functions
     function updateSliderLabels() {
@@ -258,13 +338,17 @@
       // Update UI states based on API availability
       if (!isOfflineMode) {
         const controlsDisabled = !apiAvailable;
-        modelSelect.disabled = controlsDisabled;
         promptInput.disabled = controlsDisabled;
         negativePromptInput.disabled = controlsDisabled;
         stepsSlider.disabled = controlsDisabled;
         guidanceSlider.disabled = controlsDisabled;
         strengthSlider.disabled = controlsDisabled;
         suggestButton.disabled = controlsDisabled;
+
+        // Update model cards
+        document.querySelectorAll('.model-card').forEach(card => {
+          card.classList.toggle('disabled', controlsDisabled);
+        });
       }
     }
 
@@ -275,6 +359,7 @@
         offlineModeButton.textContent = 'Try API Mode';
         offlineModeButton.classList.add('btn-outline-primary');
         offlineModeButton.classList.remove('btn-outline-secondary');
+        selectedModel = "offline_mode";
       } else {
         offlineModeButton.textContent = 'Use Offline Mode';
         offlineModeButton.classList.remove('btn-outline-primary');
@@ -284,13 +369,252 @@
 
       // Enable/disable controls based on mode
       const controlsDisabled = isOfflineMode || !apiAvailable;
-      modelSelect.disabled = controlsDisabled;
       promptInput.disabled = controlsDisabled;
       negativePromptInput.disabled = controlsDisabled;
       stepsSlider.disabled = controlsDisabled;
       guidanceSlider.disabled = controlsDisabled;
       strengthSlider.disabled = controlsDisabled;
       suggestButton.disabled = controlsDisabled;
+
+      // Update model cards
+      document.querySelectorAll('.model-card').forEach(card => {
+        card.classList.toggle('disabled', controlsDisabled);
+        if (card.dataset.model === selectedModel) {
+          card.classList.add('selected');
+        } else {
+          card.classList.remove('selected');
+        }
+      });
+
+      updateProgressUI(null);
+    }
+
+    // WebSocket Setup
+    function setupWebSocket() {
+      if (websocket) {
+        websocket.close();
+        websocket = null;
+      }
+
+      const wsUrl = apiUrlInput.value.replace('http://', 'ws://').replace('https://', 'wss://') + '/ws';
+
+      try {
+        websocket = new WebSocket(wsUrl);
+
+        websocket.onopen = () => {
+          console.log('WebSocket connected');
+          clearTimeout(websocketReconnectTimer);
+        };
+
+        websocket.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+
+            if (data.type === 'progress') {
+              updateProgressUI(data);
+            } else if (data.type === 'status') {
+              console.log('Server status:', data);
+
+              // Update server info
+              let infoHtml = `<strong>Server Status:</strong> Connected`;
+
+              if (data.models && data.models.length) {
+                infoHtml += `<br><strong>Models:</strong> ${data.models.length} available`;
+                loadModelCards(data.models);
+              }
+
+              if (data.cuda_available) {
+                infoHtml += `<br><strong>GPU:</strong> ${data.cuda_device || 'Available'}`;
+                if (data.cuda_memory_gb) {
+                  infoHtml += ` (${data.cuda_memory_gb} GB)`;
+                }
+              } else {
+                infoHtml += `<br><strong>GPU:</strong> Not available - using CPU`;
+              }
+
+              serverInfo.innerHTML = infoHtml;
+            } else if (data.type === 'error') {
+              console.error('Server error:', data.message);
+              alert(`Server error: ${data.message}`);
+            }
+          } catch (e) {
+            console.error('Error parsing WebSocket message:', e);
+          }
+        };
+
+        websocket.onclose = () => {
+          console.log('WebSocket closed');
+          // Try to reconnect after a delay
+          clearTimeout(websocketReconnectTimer);
+          websocketReconnectTimer = setTimeout(() => {
+            if (!isOfflineMode) {
+              setupWebSocket();
+            }
+          }, 5000);
+        };
+
+        websocket.onerror = (error) => {
+          console.error('WebSocket error:', error);
+        };
+
+        return true;
+      } catch (error) {
+        console.error('Failed to create WebSocket:', error);
+        return false;
+      }
+    }
+
+    function updateProgressUI(data) {
+      if (!data) {
+        progressContainer.style.display = 'none';
+        progressBar.style.width = '0%';
+        progressText.textContent = '';
+        return;
+      }
+
+      progressContainer.style.display = 'block';
+
+      if (data.status === 'starting') {
+        progressBar.style.width = '0%';
+        progressText.textContent = 'Starting generation...';
+      } else if (data.status === 'refining') {
+        progressBar.style.width = `${data.percentage}%`;
+        progressText.textContent = `Refining image... ${Math.round(data.percentage)}%`;
+      } else if (data.status === 'completed') {
+        progressBar.style.width = '100%';
+        progressText.textContent = 'Generation complete!';
+
+        // Hide the progress after a delay
+        setTimeout(() => {
+          progressContainer.style.display = 'none';
+        }, 2000);
+      } else {
+        // Regular progress update
+        progressBar.style.width = `${data.percentage}%`;
+
+        // Format time remaining
+        let timeText = '';
+        if (data.remaining_seconds !== undefined) {
+          if (data.remaining_seconds > 60) {
+            timeText = ` (${Math.round(data.remaining_seconds / 60)} min ${Math.round(data.remaining_seconds % 60)} sec remaining)`;
+          } else {
+            timeText = ` (${Math.round(data.remaining_seconds)} sec remaining)`;
+          }
+        }
+
+        progressText.textContent = `Step ${data.step}/${data.total} - ${Math.round(data.percentage)}%${timeText}`;
+      }
+    }
+
+    function loadModelCards(models) {
+      // Create model selection cards
+      modelCards.innerHTML = '';
+
+      models.forEach(model => {
+        const col = document.createElement('div');
+        col.className = 'col-md-6 col-lg-3';
+
+        const card = document.createElement('div');
+        card.className = 'model-card';
+        card.dataset.model = model;
+        if (model === selectedModel) {
+          card.classList.add('selected');
+        }
+        if (isOfflineMode || !apiAvailable) {
+          card.classList.add('disabled');
+        }
+
+        // Format model name for display
+        let displayName = model;
+        let description = '';
+
+        if (model === 'sdxl_base') {
+          displayName = 'SDXL Base';
+          description = 'High quality base model';
+        } else if (model === 'sdxl_base+refiner') {
+          displayName = 'SDXL + Refiner';
+          description = 'Best quality with refinement';
+        } else if (model === 'sd_v1_4') {
+          displayName = 'SD v1.4';
+          description = 'Classic model, faster';
+        } else if (model === 'sd_v1_5') {
+          displayName = 'SD v1.5';
+          description = 'Improved classic model';
+        }
+
+        card.innerHTML = `
+          <h6 class="mb-1">${displayName}</h6>
+          <div class="small text-muted">${description}</div>
+        `;
+
+        card.addEventListener('click', () => {
+          if (isOfflineMode || !apiAvailable) return;
+
+          // Update selection
+          document.querySelectorAll('.model-card').forEach(c => {
+            c.classList.remove('selected');
+          });
+          card.classList.add('selected');
+          selectedModel = model;
+        });
+
+        col.appendChild(card);
+        modelCards.appendChild(col);
+      });
+
+      // Add offline mode option
+      const col = document.createElement('div');
+      col.className = 'col-md-6 col-lg-3';
+
+      const card = document.createElement('div');
+      card.className = 'model-card';
+      card.dataset.model = 'offline_mode';
+      if (selectedModel === 'offline_mode') {
+        card.classList.add('selected');
+      }
+
+      card.innerHTML = `
+        <h6 class="mb-1">Offline Mode</h6>
+        <div class="small text-muted">No processing, camera only</div>
+      `;
+
+      card.addEventListener('click', () => {
+        document.querySelectorAll('.model-card').forEach(c => {
+          c.classList.remove('selected');
+        });
+        card.classList.add('selected');
+        selectedModel = 'offline_mode';
+        setOfflineMode(true);
+      });
+
+      col.appendChild(card);
+      modelCards.appendChild(col);
+    }
+
+    function setOfflineMode(enabled) {
+      isOfflineMode = enabled;
+      offlineModeButton.textContent = enabled ? 'Try API Mode' : 'Use Offline Mode';
+      offlineModeButton.classList.toggle('btn-outline-primary', enabled);
+      offlineModeButton.classList.toggle('btn-outline-secondary', !enabled);
+
+      // Enable/disable controls based on mode
+      const controlsDisabled = enabled || !apiAvailable;
+      promptInput.disabled = controlsDisabled;
+      negativePromptInput.disabled = controlsDisabled;
+      stepsSlider.disabled = controlsDisabled;
+      guidanceSlider.disabled = controlsDisabled;
+      strengthSlider.disabled = controlsDisabled;
+      suggestButton.disabled = controlsDisabled;
+
+      // Update model cards
+      document.querySelectorAll('.model-card').forEach(card => {
+        card.classList.toggle('disabled', controlsDisabled);
+        if (card.dataset.model === selectedModel) {
+          card.classList.add('selected');
+        } else {
+          card.classList.remove('selected');
+        }
+      });
     }
 
     // Camera Setup
@@ -339,30 +663,38 @@
 
     // API Communication
     async function checkApiAvailability() {
+      // First try the websocket connection
+      const wsConnected = setupWebSocket();
+
+      // Then check the REST API
       try {
-        const response = await fetch(`${apiUrlInput.value}/models`, {
+        const response = await fetch(`${apiUrlInput.value}/status`, {
           method: 'GET',
           headers: { 'Accept': 'application/json' }
         });
 
         if (response.ok) {
-          const models = await response.json();
+          const data = await response.json();
           updateApiStatus(true);
 
-          // Update model selection dropdown
-          modelSelect.innerHTML = '';
-          models.forEach(model => {
-            const option = document.createElement('option');
-            option.value = model;
-            option.text = model;
-            modelSelect.appendChild(option);
-          });
+          // Update server info
+          let infoHtml = `<strong>Server Status:</strong> Connected`;
 
-          // Add offline mode option
-          const offlineOption = document.createElement('option');
-          offlineOption.value = 'offline_mode';
-          offlineOption.text = 'Offline Mode';
-          modelSelect.appendChild(offlineOption);
+          if (data.models && data.models.length) {
+            infoHtml += `<br><strong>Models:</strong> ${data.models.length} available`;
+            loadModelCards(data.models);
+          }
+
+          if (data.cuda_available) {
+            infoHtml += `<br><strong>GPU:</strong> ${data.cuda_device || 'Available'}`;
+            if (data.cuda_memory_gb) {
+              infoHtml += ` (${data.cuda_memory_gb.toFixed(1)} GB)`;
+            }
+          } else {
+            infoHtml += `<br><strong>GPU:</strong> Not available - using CPU`;
+          }
+
+          serverInfo.innerHTML = infoHtml;
 
           return true;
         } else {
@@ -372,12 +704,11 @@
         console.error('API check failed:', error);
         updateApiStatus(false);
 
-        // Ensure we have at least the offline option
-        modelSelect.innerHTML = '';
-        const offlineOption = document.createElement('option');
-        offlineOption.value = 'offline_mode';
-        offlineOption.text = 'Offline Mode';
-        modelSelect.appendChild(offlineOption);
+        // Load default offline model option
+        loadModelCards(['offline_mode']);
+
+        // Update server info
+        serverInfo.innerHTML = '<strong>Server Status:</strong> Disconnected - Using offline mode';
 
         return false;
       }
@@ -401,7 +732,7 @@
       if (!imageDataUrl) return;
 
       // In offline mode, just display the camera feed
-      if (isOfflineMode || !apiAvailable) {
+      if (isOfflineMode || !apiAvailable || selectedModel === 'offline_mode') {
         generatedImage.src = imageDataUrl;
         return;
       }
@@ -411,7 +742,7 @@
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            model: modelSelect.value,
+            model: selectedModel,
             prompt: promptInput.value,
             negative_prompt: negativePromptInput.value,
             steps: parseInt(stepsSlider.value),
@@ -501,7 +832,7 @@
 
         // Start processing frames
         processFrame(); // Process one frame immediately
-        processingInterval = setInterval(processFrame, 1500);
+        processingInterval = setInterval(processFrame, parseInt(intervalSelect.value));
 
         // If in API mode, periodically check if API becomes available
         if (!isOfflineMode && !apiAvailable && !apiCheckInterval) {
@@ -516,6 +847,9 @@
         clearInterval(processingInterval);
         clearInterval(apiCheckInterval);
         apiCheckInterval = null;
+
+        // Hide progress
+        updateProgressUI(null);
       }
     }
 
@@ -542,7 +876,15 @@
 
       offlineModeButton.addEventListener('click', toggleOfflineMode);
 
-      apiUrlInput.addEventListener('change', checkApiAvailability);
+      connectButton.addEventListener('click', () => {
+        checkApiAvailability();
+      });
+
+      apiUrlInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          checkApiAvailability();
+        }
+      });
 
       suggestButton.addEventListener('click', getSuggestions);
 
@@ -550,7 +892,25 @@
       stepsSlider.addEventListener('input', updateSliderLabels);
       guidanceSlider.addEventListener('input', updateSliderLabels);
       strengthSlider.addEventListener('input', updateSliderLabels);
+
+      // Update model cards with initial data
+      loadModelCards(['offline_mode']);
     });
+
+    // Interval selection handling
+    intervalSelect.addEventListener('change', () => {
+      if (isRunning) {
+        clearInterval(processingInterval);
+        processingInterval = setInterval(processFrame, parseInt(intervalSelect.value));
+      }
+    });
+
+    // Ping the websocket to keep it alive
+    setInterval(() => {
+      if (websocket && websocket.readyState === WebSocket.OPEN) {
+        websocket.send(JSON.stringify({ type: 'ping' }));
+      }
+    }, 30000); // Every 30 seconds
 
     // Clean up on page unload
     window.addEventListener('beforeunload', () => {
@@ -558,8 +918,13 @@
         cameraStream.getTracks().forEach(track => track.stop());
       }
 
+      if (websocket) {
+        websocket.close();
+      }
+
       clearInterval(processingInterval);
       clearInterval(apiCheckInterval);
+      clearTimeout(websocketReconnectTimer);
     });
   </script>
 </body>
