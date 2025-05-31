@@ -4,183 +4,411 @@
   <meta charset="utf-8" />
   <title>SD-XL Cam Prompt UI</title>
   <script src="https://cdn.tailwindcss.com/3.4.4?plugins=forms"></script>
-  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
-  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-  <script type="module">
-    import { Card, CardContent, CardHeader } from
-      "https://esm.sh/@/components/ui/card?alias=react:react@18,react-dom:react-dom@18";
-    import { Button } from
-      "https://esm.sh/@/components/ui/button?alias=react:react@18,react-dom:react-dom@18";
-    import { Slider } from
-      "https://esm.sh/@/components/ui/slider?alias=react:react@18,react-dom:react-dom@18";
-    import { Select, SelectItem } from
-      "https://esm.sh/@/components/ui/select?alias=react:react@18,react-dom:react-dom@18";
 
-    const { useState, useEffect, useRef } = React;
+  <!-- Use direct script tags for React instead of importmap -->
+  <script src="https://unpkg.com/react@18.2.0/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.development.js"></script>
 
-    function App() {
-      const [cams, setCams] = useState([]);
-      const [camId, setCamId] = useState("");
-      const [models, setModels] = useState([]);
-      const [model, setModel] = useState("sdxl_base");
-      const [prompt, setPrompt] = useState("cyber-punk cat detective, neon rain");
-      const [neg, setNeg]     = useState("blurry, watermark");
-      const [steps, setSteps] = useState(30);
-      const [gs, setGs]       = useState(7.5);
-      const [strength, setStrength] = useState(0.7);
-      const [reply, setReply] = useState("");
-      const [running, setRunning] = useState(false);
+  <!-- Add basic shadcn components -->
+  <script src="https://unpkg.com/@radix-ui/react-slot@1.0.2/dist/index.umd.js"></script>
+  <script src="https://unpkg.com/class-variance-authority@0.7.0/dist/index.umd.js"></script>
+  <script src="https://unpkg.com/clsx@2.0.0/dist/clsx.min.js"></script>
 
-      const videoRef = useRef(null);
-      const canvas   = useRef(document.createElement("canvas"));
-      let intervalId = useRef(null);
+  <script>
+    // Define simple UI components that don't rely on the shadcn imports
+    function Card(props) {
+      return React.createElement('div', { className: 'bg-white rounded-lg border shadow-sm ' + (props.className || '') }, props.children);
+    }
 
-      /* ---------- enumerate devices & models on load ---------- */
-      useEffect(() => {
-        navigator.mediaDevices.enumerateDevices().then(devs => {
-          const vids = devs.filter(d => d.kind === "videoinput");
-          setCams(vids);
-          setCamId(vids[0]?.deviceId || "");
-          if (!vids.length) alert("No camera found");
-        });
-        fetch("http://localhost:8000/models")
-          .then(r => r.json())
-          .then(setModels)
-          .catch(console.error);
-      }, []);
+    function CardHeader(props) {
+      return React.createElement('div', { className: 'px-6 py-4 border-b ' + (props.className || '') }, props.children);
+    }
 
-      /* ---------- start / stop stream ---------- */
-      useEffect(() => {
-        if (!camId) return;
-        navigator.mediaDevices.getUserMedia({ video: { deviceId: camId } })
-          .then(stream => (videoRef.current.srcObject = stream))
-          .catch(e => alert("Camera error: " + e.message));
-        return () => {
-          videoRef.current?.srcObject?.getTracks().forEach(t => t.stop());
-        };
-      }, [camId]);
+    function CardContent(props) {
+      return React.createElement('div', { className: 'px-6 py-4 ' + (props.className || '') }, props.children);
+    }
 
-      /* ---------- core call ---------- */
-      async function tick() {
-        if (!running) return;
-        const v = videoRef.current;
-        if (!v?.videoWidth) return;
-        canvas.current.width  = v.videoWidth;
-        canvas.current.height = v.videoHeight;
-        canvas.current.getContext("2d").drawImage(v, 0, 0);
-        const b64 = canvas.current.toDataURL("image/jpeg", 0.8);
+    function Button(props) {
+      const baseClasses = 'inline-flex items-center justify-center rounded-md px-4 py-2 text-sm font-medium';
+      let variantClasses = 'bg-primary text-primary-foreground shadow hover:bg-primary/90';
 
-        const payload = {
-          model, prompt, negative_prompt: neg,
-          steps, guidance_scale: gs, strength,
-          width: 1024, height: 768, image_b64: b64,
-        };
-        try {
-          const r = await fetch("http://localhost:8000/generate", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload),
-          });
-          if (!r.ok) throw new Error(await r.text());
-          const data = await r.json();
-          setReply(data.image);
-        } catch (err) {
-          console.error(err);
-        }
+      if (props.variant === 'destructive') {
+        variantClasses = 'bg-red-500 text-white hover:bg-red-600';
+      } else if (props.variant === 'secondary') {
+        variantClasses = 'bg-gray-200 text-gray-900 hover:bg-gray-300';
+      } else if (props.variant === 'outline') {
+        variantClasses = 'border border-gray-300 bg-transparent hover:bg-gray-100';
+      } else if (props.variant === 'link') {
+        variantClasses = 'text-blue-500 underline-offset-4 hover:underline';
       }
 
-      /* ---------- start / stop loop ---------- */
-      function toggle() {
-        if (running) {
-          clearInterval(intervalId.current);
-          setRunning(false);
-          return;
-        }
-        setRunning(true);
-        tick();                       // immediate
-        intervalId.current = setInterval(tick, 1500);
+      if (props.size === 'sm') {
+        variantClasses += ' px-3 py-1 text-xs';
       }
 
-      /* ---------- suggestions ---------- */
-      async function getSug(txt) {
-        const r = await fetch("http://localhost:8000/suggest", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ partial_prompt: txt }),
-        });
-        if (!r.ok) return [];
-        return (await r.json()).suggestions;
-      }
+      const finalClassName = `${baseClasses} ${variantClasses} ${props.disabled ? 'opacity-50 cursor-not-allowed' : ''} ${props.className || ''}`;
 
-      return (
-        <div className="min-h-screen bg-muted flex flex-col items-center p-6 gap-6">
-          <h1 className="text-3xl font-bold">SD-XL Camera Demo</h1>
+      return React.createElement('button', {
+        className: finalClassName,
+        onClick: props.onClick,
+        disabled: props.disabled
+      }, props.children);
+    }
 
-          {/* --- controls --- */}
-          <Card className="w-full max-w-4xl">
-            <CardHeader className="font-semibold">Controls</CardHeader>
-            <CardContent className="space-y-4">
-
-              {/* camera + model row */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <Select value={camId} onValueChange={setCamId} label="Camera">
-                  {cams.map(c =>
-                    <SelectItem key={c.deviceId} value={c.deviceId}>{c.label||"Camera"}</SelectItem>
-                  )}
-                </Select>
-
-                <Select value={model} onValueChange={setModel} label="Model">
-                  {models.map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
-                </Select>
-              </div>
-
-              {/* prompt + negative */}
-              <textarea value={prompt}
-                onChange={e => setPrompt(e.target.value)}
-                rows="2" placeholder="Prompt"
-                className="w-full rounded-md border p-2" />
-
-              <textarea value={neg}
-                onChange={e => setNeg(e.target.value)}
-                rows="1" placeholder="Negative prompt"
-                className="w-full rounded-md border p-2" />
-
-              {/* sliders */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                <Slider value={[steps]} min={10} max={60} step={1}
-                        onValueChange={v => setSteps(v[0])}
-                        label={`Steps (${steps})`} />
-                <Slider value={[gs]} min={1} max={15} step={0.5}
-                        onValueChange={v => setGs(v[0])}
-                        label={`Guidance (${gs})`} />
-                <Slider value={[strength]} min={0.1} max={1} step={0.05}
-                        onValueChange={v => setStrength(v[0])}
-                        label={`Strength (${strength})`} />
-              </div>
-
-              {/* buttons */}
-              <div className="flex gap-4">
-                <Button variant={running ? "destructive" : "default"} onClick={toggle}>
-                  {running ? "Stop" : "Start"}
-                </Button>
-                <Button variant="secondary" onClick={() => getSug(prompt).then(s =>
-                  alert("Suggestions:\n" + s.join("\n")))}>Suggest Prompt</Button>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* --- live feeds --- */}
-          <div className="flex flex-col md:flex-row gap-6">
-            <video ref={videoRef} autoPlay playsInline
-                   className="rounded-lg border shadow-lg w-[480px]"></video>
-            {reply && <img src={reply} className="rounded-lg border shadow-lg w-[480px]" />}
-          </div>
-        </div>
+    function Select(props) {
+      return React.createElement('div', { className: 'relative' },
+        React.createElement('label', { className: 'block text-sm font-medium mb-1' }, props.label),
+        React.createElement('select', {
+          className: 'w-full rounded-md border p-2',
+          value: props.value,
+          onChange: (e) => props.onValueChange(e.target.value),
+          disabled: props.disabled
+        }, props.children)
       );
     }
 
-    ReactDOM.createRoot(document.body).render(<App />);
+    function SelectItem(props) {
+      return React.createElement('option', { value: props.value }, props.children);
+    }
+
+    function Slider(props) {
+      return React.createElement('div', { className: 'w-full' },
+        React.createElement('label', { className: 'block text-sm font-medium mb-1' }, props.label),
+        React.createElement('input', {
+          type: 'range',
+          min: props.min,
+          max: props.max,
+          step: props.step,
+          value: props.value[0],
+          onChange: (e) => props.onValueChange([parseFloat(e.target.value)]),
+          className: 'w-full',
+          disabled: props.disabled
+        })
+      );
+    }
+  </script>
+
+  <script>
+    // Main app logic
+    document.addEventListener('DOMContentLoaded', function() {
+      const { useState, useEffect, useRef } = React;
+
+      function App() {
+        const [cams, setCams] = useState([]);
+        const [camId, setCamId] = useState("");
+        const [models, setModels] = useState([]);
+        const [model, setModel] = useState("sdxl_base");
+        const [prompt, setPrompt] = useState("cyber-punk cat detective, neon rain");
+        const [neg, setNeg] = useState("blurry, watermark");
+        const [steps, setSteps] = useState(30);
+        const [gs, setGs] = useState(7.5);
+        const [strength, setStrength] = useState(0.7);
+        const [reply, setReply] = useState("");
+        const [running, setRunning] = useState(false);
+        const [apiAvailable, setApiAvailable] = useState(true);
+        const [offlineMode, setOfflineMode] = useState(false);
+
+        const videoRef = useRef(null);
+        const canvas = useRef(document.createElement("canvas"));
+        let intervalId = useRef(null);
+        let apiCheckId = useRef(null);
+
+        /* ---------- enumerate devices & models on load ---------- */
+        useEffect(() => {
+          navigator.mediaDevices.enumerateDevices().then(devs => {
+            const vids = devs.filter(d => d.kind === "videoinput");
+            setCams(vids);
+            setCamId(vids[0]?.deviceId || "");
+            if (!vids.length) alert("No camera found");
+          });
+
+          checkApiAvailability();
+        }, []);
+
+        /* ---------- check if API is available ---------- */
+        const checkApiAvailability = () => {
+          fetch("http://localhost:8000/models")
+            .then(r => r.json())
+            .then(data => {
+              setModels(data);
+              setApiAvailable(true);
+              if (offlineMode) {
+                console.log("API is now available");
+              }
+            })
+            .catch(err => {
+              console.log("API unavailable:", err);
+              setApiAvailable(false);
+              if (models.length === 0) {
+                setModels(["offline_mode"]);
+                setModel("offline_mode");
+              }
+            });
+        };
+
+        /* ---------- start / stop stream ---------- */
+        useEffect(() => {
+          if (!camId) return;
+          navigator.mediaDevices.getUserMedia({ video: { deviceId: camId } })
+            .then(stream => (videoRef.current.srcObject = stream))
+            .catch(e => alert("Camera error: " + e.message));
+          return () => {
+            videoRef.current?.srcObject?.getTracks().forEach(t => t.stop());
+          };
+        }, [camId]);
+
+        /* ---------- core call ---------- */
+        async function tick() {
+          if (!running) return;
+          const v = videoRef.current;
+          if (!v?.videoWidth) return;
+          canvas.current.width = v.videoWidth;
+          canvas.current.height = v.videoHeight;
+          canvas.current.getContext("2d").drawImage(v, 0, 0);
+          const b64 = canvas.current.toDataURL("image/jpeg", 0.8);
+
+          // In offline mode, just display the camera feed
+          if (offlineMode || !apiAvailable) {
+            setReply(b64);
+            return;
+          }
+
+          const payload = {
+            model, prompt, negative_prompt: neg,
+            steps, guidance_scale: gs, strength,
+            width: 1024, height: 768, image_b64: b64,
+          };
+          try {
+            const r = await fetch("http://localhost:8000/generate", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+            });
+            if (!r.ok) throw new Error(await r.text());
+            const data = await r.json();
+            setReply(data.image);
+
+            // If we got here, API is available
+            if (!apiAvailable) {
+              setApiAvailable(true);
+            }
+          } catch (err) {
+            console.error(err);
+            setApiAvailable(false);
+            setReply(b64); // Fallback to showing original image
+          }
+        }
+
+        /* ---------- start / stop loop ---------- */
+        function toggle() {
+          if (running) {
+            clearInterval(intervalId.current);
+            if (apiCheckId.current) clearInterval(apiCheckId.current);
+            setRunning(false);
+            return;
+          }
+
+          setRunning(true);
+          tick();                       // immediate
+          intervalId.current = setInterval(tick, 1500);
+
+          // If in offline mode, periodically check if API becomes available
+          if (!apiAvailable && !apiCheckId.current) {
+            apiCheckId.current = setInterval(checkApiAvailability, 10000); // Check every 10s
+          }
+        }
+
+        /* ---------- toggle offline mode ---------- */
+        function toggleOfflineMode() {
+          setOfflineMode(!offlineMode);
+          if (offlineMode) {
+            // If turning off offline mode, check if API is available
+            checkApiAvailability();
+          }
+        }
+
+        /* ---------- suggestions ---------- */
+        async function getSug(txt) {
+          // Fallback suggestions when offline
+          const fallbackSugs = [
+            "cyber-punk cat detective, neon rain",
+            "steampunk airship over Victorian London",
+            "hyper-realistic portrait, 85mm lens, soft lighting"
+          ];
+
+          if (offlineMode || !apiAvailable) {
+            alert("Suggestions (offline mode):\n" + fallbackSugs.join("\n"));
+            return;
+          }
+
+          try {
+            const r = await fetch("http://localhost:8000/suggest", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ partial_prompt: txt }),
+            });
+            if (!r.ok) throw new Error();
+            const data = await r.json();
+            alert("Suggestions:\n" + data.suggestions.join("\n"));
+          } catch (err) {
+            setApiAvailable(false);
+            alert("API unavailable. Offline suggestions:\n" + fallbackSugs.join("\n"));
+          }
+        }
+
+        // Create API status banner
+        const statusBannerClass = (apiAvailable && !offlineMode) ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-800';
+        const statusText = apiAvailable && !offlineMode ? 'API Connected' : offlineMode ? 'Offline Mode (Manual)' : 'API Unavailable - Using Fallback Mode';
+
+        const statusBanner = React.createElement('div', { className: `px-4 py-2 rounded-md text-sm ${statusBannerClass}` },
+          statusText,
+          (apiAvailable && !offlineMode) && React.createElement(Button, {
+            variant: "link", size: "sm", className: "ml-2 text-green-800", onClick: toggleOfflineMode
+          }, "Switch to Offline"),
+          (offlineMode || !apiAvailable) && React.createElement(Button, {
+            variant: "link", size: "sm", className: "ml-2 text-amber-800", onClick: toggleOfflineMode
+          }, offlineMode ? "Try API Mode" : "Use Offline Mode")
+        );
+
+        // Create camera selector
+        const cameraSelect = React.createElement(Select, {
+          value: camId,
+          onValueChange: setCamId,
+          label: "Camera"
+        }, cams.map(c => React.createElement(SelectItem, {
+          key: c.deviceId,
+          value: c.deviceId
+        }, c.label || "Camera")));
+
+        // Create model selector
+        const modelSelect = React.createElement(Select, {
+          value: model,
+          onValueChange: setModel,
+          label: "Model",
+          disabled: offlineMode || !apiAvailable
+        }, models.map(m => React.createElement(SelectItem, {
+          key: m,
+          value: m
+        }, m === "offline_mode" ? "Offline Mode" : m)));
+
+        // Create input controls
+        const promptTextarea = React.createElement('textarea', {
+          value: prompt,
+          onChange: e => setPrompt(e.target.value),
+          rows: "2",
+          placeholder: "Prompt",
+          className: `w-full rounded-md border p-2 ${(offlineMode || !apiAvailable) ? 'opacity-60' : ''}`,
+          disabled: offlineMode || !apiAvailable
+        });
+
+        const negativePromptTextarea = React.createElement('textarea', {
+          value: neg,
+          onChange: e => setNeg(e.target.value),
+          rows: "1",
+          placeholder: "Negative prompt",
+          className: `w-full rounded-md border p-2 ${(offlineMode || !apiAvailable) ? 'opacity-60' : ''}`,
+          disabled: offlineMode || !apiAvailable
+        });
+
+        // Create sliders
+        const stepsSlider = React.createElement(Slider, {
+          value: [steps],
+          min: 10,
+          max: 60,
+          step: 1,
+          onValueChange: v => setSteps(v[0]),
+          label: `Steps (${steps})`,
+          disabled: offlineMode || !apiAvailable
+        });
+
+        const guidanceSlider = React.createElement(Slider, {
+          value: [gs],
+          min: 1,
+          max: 15,
+          step: 0.5,
+          onValueChange: v => setGs(v[0]),
+          label: `Guidance (${gs})`,
+          disabled: offlineMode || !apiAvailable
+        });
+
+        const strengthSlider = React.createElement(Slider, {
+          value: [strength],
+          min: 0.1,
+          max: 1,
+          step: 0.05,
+          onValueChange: v => setStrength(v[0]),
+          label: `Strength (${strength})`,
+          disabled: offlineMode || !apiAvailable
+        });
+
+        // Create buttons
+        const startStopButton = React.createElement(Button, {
+          variant: running ? "destructive" : "default",
+          onClick: toggle
+        }, running ? "Stop" : "Start");
+
+        const suggestButton = React.createElement(Button, {
+          variant: "secondary",
+          onClick: () => getSug(prompt)
+        }, "Suggest Prompt");
+
+        const offlineModeButton = React.createElement(Button, {
+          variant: offlineMode ? "default" : "outline",
+          onClick: toggleOfflineMode
+        }, offlineMode ? "Try API Mode" : "Use Offline Mode");
+
+        // Create video and image elements
+        const videoElement = React.createElement('video', {
+          ref: videoRef,
+          autoPlay: true,
+          playsInline: true,
+          className: "rounded-lg border shadow-lg w-[480px]"
+        });
+
+        const imageElement = reply ? React.createElement('img', {
+          src: reply,
+          className: "rounded-lg border shadow-lg w-[480px]"
+        }) : null;
+
+        // Construct the UI
+        return React.createElement('div', { className: "min-h-screen bg-muted flex flex-col items-center p-6 gap-6" },
+          React.createElement('h1', { className: "text-3xl font-bold" }, "SD-XL Camera Demo"),
+          statusBanner,
+          React.createElement(Card, { className: "w-full max-w-4xl" },
+            React.createElement(CardHeader, { className: "font-semibold" }, "Controls"),
+            React.createElement(CardContent, { className: "space-y-4" },
+              React.createElement('div', { className: "grid grid-cols-1 md:grid-cols-2 gap-4" },
+                cameraSelect,
+                modelSelect
+              ),
+              promptTextarea,
+              negativePromptTextarea,
+              React.createElement('div', { className: "grid grid-cols-1 md:grid-cols-3 gap-6" },
+                stepsSlider,
+                guidanceSlider,
+                strengthSlider
+              ),
+              React.createElement('div', { className: "flex gap-4" },
+                startStopButton,
+                suggestButton,
+                offlineModeButton
+              )
+            )
+          ),
+          React.createElement('div', { className: "flex flex-col md:flex-row gap-6" },
+            videoElement,
+            imageElement
+          )
+        );
+      }
+
+      // Render the app
+      const rootElement = document.getElementById('app');
+      ReactDOM.render(React.createElement(App), rootElement);
+    });
   </script>
 </head>
-<body class="h-full"></body>
+<body class="h-full">
+  <div id="app"></div>
+</body>
 </html>
