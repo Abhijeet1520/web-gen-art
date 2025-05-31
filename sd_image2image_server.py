@@ -8,6 +8,7 @@ import time
 import socket
 import sys
 from typing import Dict, Any, Optional, List, Set
+import logging
 
 import torch
 import uvicorn
@@ -17,42 +18,92 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
 
+# Set up logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger("sd_server")
+
+# Check for required packages
+REQUIRED_PACKAGES = {
+    "diffusers": "pip install diffusers",
+    "transformers": "pip install transformers",
+    "torch": "pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118",
+    "huggingface_hub": "pip install huggingface_hub",
+}
+
+missing_packages = []
+for package, install_cmd in REQUIRED_PACKAGES.items():
+    try:
+        __import__(package)
+    except ImportError:
+        missing_packages.append(f"{package} ({install_cmd})")
+
+if missing_packages:
+    logger.error("Missing required packages:")
+    for pkg in missing_packages:
+        logger.error(f"  - {pkg}")
+    logger.error("Please install the required packages and try again.")
+    sys.exit(1)
+
 # Try to import xformers, but make it optional
 try:
     import xformers
     XFORMERS_AVAILABLE = True
-    print("xformers is available and will be used for optimization")
+    logger.info("xformers is available and will be used for optimization")
 except ImportError:
     XFORMERS_AVAILABLE = False
-    print("xformers is not available, will run without this optimization")
+    logger.info("xformers is not available, will run without this optimization")
 
 # Diffusers imports with better error handling
+HAS_SDXL = False
+HAS_ADAPTER = False
+HAS_SD = False
+
 try:
-    from diffusers import (
-        StableDiffusionXLImg2ImgPipeline,
-        StableDiffusionImg2ImgPipeline,
-        DPMSolverMultistepScheduler,
-    )
+    from diffusers import DPMSolverMultistepScheduler
+
+    # Try to import StableDiffusion models
+    try:
+        from diffusers import StableDiffusionImg2ImgPipeline
+        HAS_SD = True
+        logger.info("StableDiffusionImg2ImgPipeline is available")
+    except ImportError as e:
+        logger.warning(f"StableDiffusionImg2ImgPipeline not available: {e}")
+
+    # Try to import SDXL models
+    try:
+        from diffusers import StableDiffusionXLImg2ImgPipeline
+        HAS_SDXL = True
+        logger.info("StableDiffusionXLImg2ImgPipeline is available")
+    except ImportError as e:
+        logger.warning(f"StableDiffusionXLImg2ImgPipeline not available: {e}")
 
     # Try to import the adapter pipeline if available
     try:
         from diffusers import StableDiffusionXLAdapterPipeline
-        ADAPTER_AVAILABLE = True
-    except ImportError:
-        print("StableDiffusionXLAdapterPipeline not available, refiners will be disabled")
-        ADAPTER_AVAILABLE = False
+        HAS_ADAPTER = True
+        logger.info("StableDiffusionXLAdapterPipeline is available")
+    except ImportError as e:
+        logger.warning(f"StableDiffusionXLAdapterPipeline not available: {e}")
 
 except ImportError as e:
-    print(f"Error importing diffusers: {e}")
-    print("Please install the required packages: pip install diffusers transformers")
+    logger.error(f"Error importing diffusers: {e}")
+    logger.error("Please install the required packages: pip install diffusers transformers")
     sys.exit(1)
+
+# Import HuggingFace Hub for model downloading
+try:
+    from huggingface_hub import snapshot_download, hf_hub_download
+    HF_HUB_AVAILABLE = True
+except ImportError:
+    HF_HUB_AVAILABLE = False
+    logger.warning("huggingface_hub not available. Models will not be automatically downloaded.")
 
 # Keep track of active WebSocket connections
 active_connections: Set[WebSocket] = set()
 
 # Define request/response models
 class GenRequest(BaseModel):
-    model: str = "sdxl_base"
+    model: str = "sd_v1_5"  # Changed default to more commonly available model
     prompt: str
     negative_prompt: Optional[str] = None
     steps: int = 30
@@ -71,9 +122,20 @@ class SuggestRequest(BaseModel):
 class SuggestResponse(BaseModel):
     suggestions: List[str]
 
+class ModelInfo(BaseModel):
+    id: str
+    name: str
+    description: str
+    size_mb: Optional[float] = None
+    speed: str = "medium"
+    quality: str = "medium"
+    available: bool = True
+    has_refiner: bool = False
+
 class ServerStatusResponse(BaseModel):
     status: str
     models: List[str]
+    model_info: List[ModelInfo]
     available_models: List[str]  # Models that are actually loaded
     cuda_available: bool
     cuda_device: Optional[str] = None
@@ -99,32 +161,78 @@ TEXTURE_PROMPTS = [
     "space station with metallic walls, control panels, and star view windows"
 ]
 
-# Model registry - define models to try loading
-MODELS: Dict[str, Dict[str, Any]] = {
-    "sd_v1_4": {
-        "repo": "CompVis/stable-diffusion-v1-4",
-        "class": StableDiffusionImg2ImgPipeline,
-        "refiner": None,
-    },
-    "sd_v1_5": {
-        "repo": "runwayml/stable-diffusion-v1-5",
-        "class": StableDiffusionImg2ImgPipeline,
-        "refiner": None,
-    },
-    "sdxl_base": {
-        "repo": "stabilityai/stable-diffusion-xl-base-1.0",
-        "class": StableDiffusionXLImg2ImgPipeline,
-        "refiner": None,
-    },
-}
+# Model registry - define models to try loading based on available pipelines
+MODELS: Dict[str, Dict[str, Any]] = {}
+
+# Add SD models if available
+if HAS_SD:
+    MODELS.update({
+        "sd_v1_4": {
+            "repo": "CompVis/stable-diffusion-v1-4",
+            "class": StableDiffusionImg2ImgPipeline,
+            "refiner": None,
+            "name": "Stable Diffusion v1.4",
+            "description": "Original stable diffusion model, good speed",
+            "size_mb": 4000,
+            "speed": "fast",
+            "quality": "medium",
+        },
+        "sd_v1_5": {
+            "repo": "runwayml/stable-diffusion-v1-5",
+            "class": StableDiffusionImg2ImgPipeline,
+            "refiner": None,
+            "name": "Stable Diffusion v1.5",
+            "description": "Improved classic model, good all-around choice",
+            "size_mb": 4000,
+            "speed": "fast",
+            "quality": "medium",
+        },
+    })
+
+# Add SDXL models if available
+if HAS_SDXL:
+    MODELS.update({
+        "sdxl_base": {
+            "repo": "stabilityai/stable-diffusion-xl-base-1.0",
+            "class": StableDiffusionXLImg2ImgPipeline,
+            "refiner": None,
+            "name": "SDXL Base",
+            "description": "High quality but slower generation",
+            "size_mb": 6800,
+            "speed": "slow",
+            "quality": "high",
+        },
+    })
 
 # Only add refiner option if adapter is available
-if ADAPTER_AVAILABLE:
+if HAS_SDXL and HAS_ADAPTER:
     MODELS["sdxl_base+refiner"] = {
         "repo": "stabilityai/stable-diffusion-xl-base-1.0",
         "class": StableDiffusionXLImg2ImgPipeline,
         "refiner": "stabilityai/stable-diffusion-xl-refiner-1.0",
+        "name": "SDXL with Refiner",
+        "description": "Best quality with two-stage generation",
+        "size_mb": 12000,
+        "speed": "very slow",
+        "quality": "very high",
+        "has_refiner": True,
     }
+
+# Models info accessor function
+def get_model_info() -> List[ModelInfo]:
+    return [
+        ModelInfo(
+            id=model_id,
+            name=info.get("name", model_id),
+            description=info.get("description", ""),
+            size_mb=info.get("size_mb"),
+            speed=info.get("speed", "medium"),
+            quality=info.get("quality", "medium"),
+            available=model_id in AVAILABLE_MODELS if AVAILABLE_MODELS else True,
+            has_refiner=bool(info.get("refiner"))
+        )
+        for model_id, info in MODELS.items()
+    ]
 
 # Cache for loaded models
 CACHE: Dict[str, Any] = {}
@@ -151,7 +259,7 @@ class ProgressCallback:
             remaining = 0
 
         # Log progress to console
-        print(f"Progress: {step}/{self.total_steps} ({progress_pct:.1f}%) - ETA: {remaining:.1f}s")
+        logger.info(f"Progress: {step}/{self.total_steps} ({progress_pct:.1f}%) - ETA: {remaining:.1f}s")
 
         # Store the progress data to be sent via WebSocket
         progress_data = {
@@ -169,7 +277,7 @@ class ProgressCallback:
             if loop.is_running():
                 loop.create_task(broadcast_message(json.dumps(progress_data)))
         except Exception as e:
-            print(f"Could not send progress via websocket: {e}")
+            logger.warning(f"Could not send progress via websocket: {e}")
 
 # Broadcast a message to all connected WebSocket clients
 async def broadcast_message(message: str):
@@ -196,23 +304,66 @@ app.add_middleware(
     allow_headers=["*"],  # Allow all headers
 )
 
+def download_model(repo_id: str) -> bool:
+    """Download a model from HuggingFace Hub if not already downloaded"""
+    if not HF_HUB_AVAILABLE:
+        logger.warning(f"Cannot download {repo_id}: huggingface_hub not available")
+        return False
+
+    try:
+        # Use the cache_dir from HF_HUB_CACHE or ~/.cache/huggingface/hub
+        cache_dir = os.environ.get("HF_HUB_CACHE", os.path.expanduser("~/.cache/huggingface/hub"))
+
+        # Check if model is already downloaded
+        model_dir = os.path.join(cache_dir, "models--" + repo_id.replace("/", "--"))
+        if os.path.exists(model_dir):
+            logger.info(f"Model {repo_id} already exists at {model_dir}")
+            return True
+
+        logger.info(f"Downloading model {repo_id}...")
+        # Use snapshot_download to get the model
+        snapshot_download(
+            repo_id=repo_id,
+            local_files_only=False,
+            resume_download=True,
+            use_safetensors=True
+        )
+        logger.info(f"Downloaded model {repo_id} successfully")
+        return True
+    except Exception as e:
+        logger.error(f"Error downloading model {repo_id}: {e}")
+        return False
+
 def preload_models():
     """Try to load each model at startup and track which ones are available"""
     global AVAILABLE_MODELS
 
-    print("Checking model availability...")
+    logger.info("Checking model availability...")
     device = "cuda" if torch.cuda.is_available() else "cpu"
     torch_dtype = torch.float16 if device == "cuda" else torch.float32
 
     for model_name in MODELS.keys():
         try:
+            # Try to download the model first
+            model_spec = MODELS[model_name]
+            repo_id = model_spec["repo"]
+
+            if HF_HUB_AVAILABLE:
+                # Try downloading the model
+                download_model(repo_id)
+
+                # Also download refiner if present
+                if model_spec["refiner"]:
+                    download_model(model_spec["refiner"])
+
+            # Try loading the model
             get_pipeline(model_name, device, torch_dtype, preloading=True)
             AVAILABLE_MODELS.append(model_name)
-            print(f"✓ Model '{model_name}' loaded successfully")
+            logger.info(f"✓ Model '{model_name}' loaded successfully")
         except Exception as e:
-            print(f"✗ Model '{model_name}' failed to load: {str(e)}")
+            logger.error(f"✗ Model '{model_name}' failed to load: {str(e)}")
 
-    print(f"Available models: {AVAILABLE_MODELS}")
+    logger.info(f"Available models: {AVAILABLE_MODELS}")
     return AVAILABLE_MODELS
 
 def get_pipeline(name: str, device: str, torch_dtype, preloading=False):
@@ -231,40 +382,52 @@ def get_pipeline(name: str, device: str, torch_dtype, preloading=False):
         )
 
     spec = MODELS[name]
-    print(f"Loading model: {name} from {spec['repo']}...")
+    logger.info(f"Loading model: {name} from {spec['repo']}...")
 
     try:
         # Load base model
         pipe = spec["class"].from_pretrained(
             spec["repo"],
             torch_dtype=torch_dtype,
-            use_safetensors=True
+            use_safetensors=True,
+            local_files_only=False,  # Try to download if not found
         ).to(device)
 
         # Use DPM++ scheduler for better quality/speed
         pipe.scheduler = DPMSolverMultistepScheduler.from_config(pipe.scheduler.config)
+        pipe.safety_checker = None
 
         # Enable optimizations if available
         if XFORMERS_AVAILABLE and hasattr(pipe, "enable_xformers_memory_efficient_attention"):
-            pipe.enable_xformers_memory_efficient_attention()
+            try:
+                pipe.enable_xformers_memory_efficient_attention()
+            except Exception as e:
+                logger.warning(f"Could not enable xformers: {e}")
 
         if hasattr(pipe, "to") and torch.cuda.is_available():
-            pipe.to(memory_format=torch.channels_last)
+            try:
+                pipe.to(memory_format=torch.channels_last)
+            except Exception as e:
+                logger.warning(f"Could not set memory format: {e}")
 
         # Load refiner if specified and adapter is available
         refiner = None
-        if spec["refiner"] and ADAPTER_AVAILABLE:
-            refiner = StableDiffusionXLAdapterPipeline.from_pretrained(
-                spec["refiner"],
-                torch_dtype=torch_dtype,
-                use_safetensors=True
-            ).to(device)
+        if spec["refiner"] and HAS_ADAPTER:
+            try:
+                refiner = StableDiffusionXLAdapterPipeline.from_pretrained(
+                    spec["refiner"],
+                    torch_dtype=torch_dtype,
+                    use_safetensors=True,
+                    local_files_only=False,  # Try to download if not found
+                ).to(device)
 
-            if XFORMERS_AVAILABLE and hasattr(refiner, "enable_xformers_memory_efficient_attention"):
-                refiner.enable_xformers_memory_efficient_attention()
+                if XFORMERS_AVAILABLE and hasattr(refiner, "enable_xformers_memory_efficient_attention"):
+                    refiner.enable_xformers_memory_efficient_attention()
 
-            if hasattr(refiner, "to") and torch.cuda.is_available():
-                refiner.to(memory_format=torch.channels_last)
+                if hasattr(refiner, "to") and torch.cuda.is_available():
+                    refiner.to(memory_format=torch.channels_last)
+            except Exception as e:
+                logger.warning(f"Could not load refiner: {e}")
 
         CACHE[name] = (pipe, refiner)
         return CACHE[name]
@@ -280,7 +443,7 @@ def get_pipeline(name: str, device: str, torch_dtype, preloading=False):
                 "or run the server without xformers optimization."
             )
 
-        print(f"Error loading model: {error_msg}")
+        logger.error(f"Error loading model: {error_msg}")
         if preloading:
             # When preloading, just return the error without raising an exception
             return None
@@ -293,6 +456,7 @@ async def root():
     return {
         "message": "Stable Diffusion Texture Transformer API is running",
         "available_models": AVAILABLE_MODELS,
+        "model_info": [m.dict() for m in get_model_info()]
     }
 
 @app.get("/status", response_model=ServerStatusResponse)
@@ -301,6 +465,7 @@ async def server_status():
     response = {
         "status": "running",
         "models": list(MODELS.keys()),
+        "model_info": get_model_info(),
         "available_models": AVAILABLE_MODELS,
         "cuda_available": torch.cuda.is_available(),
         "xformers_available": XFORMERS_AVAILABLE,
@@ -312,10 +477,10 @@ async def server_status():
 
     return response
 
-@app.get("/models", response_model=List[str])
+@app.get("/models", response_model=List[ModelInfo])
 async def list_models():
-    """Return list of available models that were successfully loaded"""
-    return AVAILABLE_MODELS if AVAILABLE_MODELS else list(MODELS.keys())
+    """Return detailed information about available models"""
+    return get_model_info()
 
 @app.post("/generate", response_model=GenResponse)
 async def generate(req: GenRequest, background_tasks: BackgroundTasks):
@@ -363,7 +528,7 @@ async def generate(req: GenRequest, background_tasks: BackgroundTasks):
                 callback_steps=1
             ).images[0]
         except Exception as pipe_err:
-            print(f"Error with callback, trying without: {pipe_err}")
+            logger.warning(f"Error with callback, trying without: {pipe_err}")
             # Try again without callback
             base_out = pipe(
                 prompt=req.prompt,
@@ -404,7 +569,7 @@ async def generate(req: GenRequest, background_tasks: BackgroundTasks):
                         callback_steps=1
                     ).images[0]
                 except Exception as callback_err:
-                    print(f"Refiner callback error, trying without: {callback_err}")
+                    logger.warning(f"Refiner callback error, trying without: {callback_err}")
                     # Try again without callback
                     final_img = refiner(
                         prompt=req.prompt,
@@ -415,7 +580,7 @@ async def generate(req: GenRequest, background_tasks: BackgroundTasks):
                         adapter_conditioning_scale=0.8
                     ).images[0]
             except Exception as refiner_error:
-                print(f"Refiner error: {str(refiner_error)}")
+                logger.error(f"Refiner error: {str(refiner_error)}")
                 # If the adapter approach fails, fall back to using base_out
                 final_img = base_out
                 await broadcast_message(json.dumps({
@@ -441,7 +606,7 @@ async def generate(req: GenRequest, background_tasks: BackgroundTasks):
         return {"image": f"data:image/png;base64,{b64}"}
 
     except Exception as e:
-        print(f"Error in generate: {str(e)}")
+        logger.error(f"Error in generate: {str(e)}")
         import traceback
         traceback.print_exc()
 
@@ -470,10 +635,10 @@ async def suggest(req: SuggestRequest):
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    print(f"New WebSocket connection request from {websocket.client}")
+    logger.info(f"New WebSocket connection request from {websocket.client}")
     try:
         await websocket.accept()
-        print(f"WebSocket connection accepted for {websocket.client}")
+        logger.info(f"WebSocket connection accepted for {websocket.client}")
         active_connections.add(websocket)
 
         # Send initial status message
@@ -481,6 +646,7 @@ async def websocket_endpoint(websocket: WebSocket):
             "type": "status",
             "message": "Connected to server",
             "models": list(MODELS.keys()),
+            "model_info": [m.dict() for m in get_model_info()],
             "available_models": AVAILABLE_MODELS,
             "cuda_available": torch.cuda.is_available(),
             "xformers_available": XFORMERS_AVAILABLE
@@ -500,14 +666,14 @@ async def websocket_endpoint(websocket: WebSocket):
                 if msg.get("type") == "ping":
                     await websocket.send_text(json.dumps({"type": "pong"}))
             except Exception as e:
-                print(f"Error processing WebSocket message: {str(e)}")
+                logger.error(f"Error processing WebSocket message: {str(e)}")
                 pass
     except WebSocketDisconnect:
-        print(f"WebSocket client disconnected: {websocket.client}")
+        logger.info(f"WebSocket client disconnected: {websocket.client}")
         if websocket in active_connections:
             active_connections.remove(websocket)
     except Exception as e:
-        print(f"WebSocket error: {str(e)}")
+        logger.error(f"WebSocket error: {str(e)}")
         if websocket in active_connections:
             active_connections.remove(websocket)
 
@@ -530,8 +696,12 @@ def main():
     parser.add_argument("--auto-port", action="store_true", help="Automatically find an available port if specified port is in use")
     parser.add_argument("--log-level", type=str, default="info", choices=["debug", "info", "warning", "error", "critical"], help="Logging level")
     parser.add_argument("--skip-model-check", action="store_true", help="Skip checking model availability at startup")
+    parser.add_argument("--no-download", action="store_true", help="Skip downloading models if not found")
 
     args = parser.parse_args()
+
+    # Set logging level
+    logger.setLevel(getattr(logging, args.log_level.upper()))
 
     # Try to find an available port if requested
     port = args.port
@@ -539,17 +709,23 @@ def main():
         try:
             port = find_available_port(start_port=port)
         except RuntimeError as e:
-            print(f"Error: {str(e)}")
+            logger.error(f"Error: {str(e)}")
             return 1
 
     # Print welcome message
-    print(f"Starting Stable Diffusion Texture Transformer API server on {args.host}:{port}")
-    print(f"Defined models: {list(MODELS.keys())}")
-    print(f"CUDA available: {torch.cuda.is_available()}")
+    logger.info(f"Starting Stable Diffusion Texture Transformer API server on {args.host}:{port}")
+    logger.info(f"Defined models: {list(MODELS.keys())}")
+    logger.info(f"CUDA available: {torch.cuda.is_available()}")
 
     if torch.cuda.is_available():
-        print(f"CUDA device: {torch.cuda.get_device_name(0)}")
-        print(f"CUDA memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
+        logger.info(f"CUDA device: {torch.cuda.get_device_name(0)}")
+        logger.info(f"CUDA memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
+
+    # Disable model downloading if requested
+    if args.no_download:
+        global HF_HUB_AVAILABLE
+        HF_HUB_AVAILABLE = False
+        logger.info("Model downloading disabled")
 
     # Preload models if not skipped
     if not args.skip_model_check:
@@ -557,11 +733,11 @@ def main():
 
     # Start the server
     try:
-        uvicorn.run(app, host=args.host, port=port, log_level=args.log_level)
+        uvicorn.run(app, host=args.host, port=port, log_level=args.log_level.lower())
     except OSError as e:
         if "address already in use" in str(e).lower():
-            print(f"\nError: Port {port} is already in use.")
-            print("Use --auto-port to automatically find an available port or specify a different port with --port.")
+            logger.error(f"Port {port} is already in use.")
+            logger.error("Use --auto-port to automatically find an available port or specify a different port with --port.")
             return 1
         raise
 
