@@ -6,6 +6,7 @@ import asyncio
 import json
 import time
 import socket
+import sys
 from typing import Dict, Any, Optional, List, Set
 
 import torch
@@ -16,12 +17,35 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
 
-from diffusers import (
-    StableDiffusionXLImg2ImgPipeline,
-    StableDiffusionXLAdapterPipeline,  # Changed from StableDiffusionXLRefinerPipeline
-    StableDiffusionImg2ImgPipeline,
-    DPMSolverMultistepScheduler,
-)
+# Try to import xformers, but make it optional
+try:
+    import xformers
+    XFORMERS_AVAILABLE = True
+    print("xformers is available and will be used for optimization")
+except ImportError:
+    XFORMERS_AVAILABLE = False
+    print("xformers is not available, will run without this optimization")
+
+# Diffusers imports with better error handling
+try:
+    from diffusers import (
+        StableDiffusionXLImg2ImgPipeline,
+        StableDiffusionImg2ImgPipeline,
+        DPMSolverMultistepScheduler,
+    )
+
+    # Try to import the adapter pipeline if available
+    try:
+        from diffusers import StableDiffusionXLAdapterPipeline
+        ADAPTER_AVAILABLE = True
+    except ImportError:
+        print("StableDiffusionXLAdapterPipeline not available, refiners will be disabled")
+        ADAPTER_AVAILABLE = False
+
+except ImportError as e:
+    print(f"Error importing diffusers: {e}")
+    print("Please install the required packages: pip install diffusers transformers")
+    sys.exit(1)
 
 # Keep track of active WebSocket connections
 active_connections: Set[WebSocket] = set()
@@ -50,22 +74,33 @@ class SuggestResponse(BaseModel):
 class ServerStatusResponse(BaseModel):
     status: str
     models: List[str]
+    available_models: List[str]  # Models that are actually loaded
     cuda_available: bool
     cuda_device: Optional[str] = None
     cuda_memory_gb: Optional[float] = None
+    xformers_available: bool = XFORMERS_AVAILABLE
 
-# Model registry
+# Example prompts for texture transformations
+TEXTURE_PROMPTS = [
+    "medieval stone castle with torch-lit walls and wooden beams, highly detailed",
+    "tropical jungle environment with lush vegetation overtaking furniture",
+    "futuristic cyberpunk room with neon lights and holographic displays",
+    "winter wonderland with snow-covered surfaces and icicles hanging",
+    "underwater scene with coral reefs, seaweed, and bubbles floating upward",
+    "ancient temple with moss-covered stone walls and golden artifacts",
+    "steampunk workshop with brass gears, copper pipes, and vintage machinery",
+    "fantasy crystal cave with glowing gems embedded in the walls",
+    "post-apocalyptic abandoned room with plant overgrowth and decay",
+    "luxury gold and marble palace with ornate decorations and columns",
+    "rustic log cabin with wooden walls and a warm fireplace glow",
+    "retro 80s-style room with synthwave colors and geometric patterns",
+    "japanese zen garden with minimalist design and natural elements",
+    "candy land with sugary textures and pastel colors on all surfaces",
+    "space station with metallic walls, control panels, and star view windows"
+]
+
+# Model registry - define models to try loading
 MODELS: Dict[str, Dict[str, Any]] = {
-    "sdxl_base": {
-        "repo": "stabilityai/stable-diffusion-xl-base-1.0",
-        "class": StableDiffusionXLImg2ImgPipeline,
-        "refiner": None,
-    },
-    "sdxl_base+refiner": {
-        "repo": "stabilityai/stable-diffusion-xl-base-1.0",
-        "class": StableDiffusionXLImg2ImgPipeline,
-        "refiner": "stabilityai/stable-diffusion-xl-refiner-1.0",
-    },
     "sd_v1_4": {
         "repo": "CompVis/stable-diffusion-v1-4",
         "class": StableDiffusionImg2ImgPipeline,
@@ -76,24 +111,24 @@ MODELS: Dict[str, Dict[str, Any]] = {
         "class": StableDiffusionImg2ImgPipeline,
         "refiner": None,
     },
+    "sdxl_base": {
+        "repo": "stabilityai/stable-diffusion-xl-base-1.0",
+        "class": StableDiffusionXLImg2ImgPipeline,
+        "refiner": None,
+    },
 }
+
+# Only add refiner option if adapter is available
+if ADAPTER_AVAILABLE:
+    MODELS["sdxl_base+refiner"] = {
+        "repo": "stabilityai/stable-diffusion-xl-base-1.0",
+        "class": StableDiffusionXLImg2ImgPipeline,
+        "refiner": "stabilityai/stable-diffusion-xl-refiner-1.0",
+    }
 
 # Cache for loaded models
 CACHE: Dict[str, Any] = {}
-
-# Example prompts for suggestions
-EXAMPLE_PROMPTS = [
-    "cyber-punk cat detective, neon rain, ultra-detailed",
-    "steampunk airship over Victorian London, dusk lighting",
-    "hyper-realistic portrait, 85 mm lens, soft rim light",
-    "fantasy landscape with mountains, trending on artstation",
-    "cosmic entity made of light and stars, ethereal, mystical",
-    "photorealistic cityscape, golden hour, atmospheric",
-    "dark forest with glowing mushrooms, fantasy concept art",
-    "anime style character, vibrant colors, detailed",
-    "underwater world with bioluminescent creatures, surreal",
-    "abstract fluid art, colorful swirls, high-resolution render"
-]
+AVAILABLE_MODELS: List[str] = []  # Will contain models that were successfully loaded
 
 # Custom callback for reporting generation progress
 class ProgressCallback:
@@ -102,7 +137,8 @@ class ProgressCallback:
         self.completed_steps = 0
         self.start_time = time.time()
 
-    async def __call__(self, step: int, timestep: int, latents: torch.FloatTensor):
+    # Use synchronous method for compatibility with diffusers
+    def __call__(self, step: int, timestep: int, latents: torch.FloatTensor):
         self.completed_steps = step
         progress_pct = (step / self.total_steps) * 100
         elapsed = time.time() - self.start_time
@@ -114,8 +150,11 @@ class ProgressCallback:
         else:
             remaining = 0
 
-        # Broadcast progress to all connected clients
-        message = {
+        # Log progress to console
+        print(f"Progress: {step}/{self.total_steps} ({progress_pct:.1f}%) - ETA: {remaining:.1f}s")
+
+        # Store the progress data to be sent via WebSocket
+        progress_data = {
             "type": "progress",
             "step": step,
             "total": self.total_steps,
@@ -124,7 +163,13 @@ class ProgressCallback:
             "remaining_seconds": round(remaining, 1)
         }
 
-        await broadcast_message(json.dumps(message))
+        # Use asyncio to broadcast via websocket if we're in an event loop
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(broadcast_message(json.dumps(progress_data)))
+        except Exception as e:
+            print(f"Could not send progress via websocket: {e}")
 
 # Broadcast a message to all connected WebSocket clients
 async def broadcast_message(message: str):
@@ -140,7 +185,7 @@ async def broadcast_message(message: str):
         active_connections.remove(conn)
 
 # Initialize FastAPI app
-app = FastAPI(title="Stable Diffusion Image-to-Image API")
+app = FastAPI(title="Stable Diffusion Texture Transformer API")
 
 # Add CORS middleware
 app.add_middleware(
@@ -151,13 +196,39 @@ app.add_middleware(
     allow_headers=["*"],  # Allow all headers
 )
 
-def get_pipeline(name: str, device: str, torch_dtype):
+def preload_models():
+    """Try to load each model at startup and track which ones are available"""
+    global AVAILABLE_MODELS
+
+    print("Checking model availability...")
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    torch_dtype = torch.float16 if device == "cuda" else torch.float32
+
+    for model_name in MODELS.keys():
+        try:
+            get_pipeline(model_name, device, torch_dtype, preloading=True)
+            AVAILABLE_MODELS.append(model_name)
+            print(f"✓ Model '{model_name}' loaded successfully")
+        except Exception as e:
+            print(f"✗ Model '{model_name}' failed to load: {str(e)}")
+
+    print(f"Available models: {AVAILABLE_MODELS}")
+    return AVAILABLE_MODELS
+
+def get_pipeline(name: str, device: str, torch_dtype, preloading=False):
     """Lazy-load model pipelines when needed"""
     if name in CACHE:
         return CACHE[name]
 
     if name not in MODELS:
         raise HTTPException(status_code=400, detail=f"Model '{name}' not found. Available models: {list(MODELS.keys())}")
+
+    # For generation requests (not preloading), check if model is in available list
+    if not preloading and AVAILABLE_MODELS and name not in AVAILABLE_MODELS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Model '{name}' failed to load at startup. Please choose from: {AVAILABLE_MODELS}"
+        )
 
     spec = MODELS[name]
     print(f"Loading model: {name} from {spec['repo']}...")
@@ -174,22 +245,22 @@ def get_pipeline(name: str, device: str, torch_dtype):
         pipe.scheduler = DPMSolverMultistepScheduler.from_config(pipe.scheduler.config)
 
         # Enable optimizations if available
-        if hasattr(pipe, "enable_xformers_memory_efficient_attention"):
+        if XFORMERS_AVAILABLE and hasattr(pipe, "enable_xformers_memory_efficient_attention"):
             pipe.enable_xformers_memory_efficient_attention()
 
         if hasattr(pipe, "to") and torch.cuda.is_available():
             pipe.to(memory_format=torch.channels_last)
 
-        # Load refiner if specified
+        # Load refiner if specified and adapter is available
         refiner = None
-        if spec["refiner"]:
-            refiner = StableDiffusionXLAdapterPipeline.from_pretrained(  # Changed to StableDiffusionXLAdapterPipeline
+        if spec["refiner"] and ADAPTER_AVAILABLE:
+            refiner = StableDiffusionXLAdapterPipeline.from_pretrained(
                 spec["refiner"],
                 torch_dtype=torch_dtype,
                 use_safetensors=True
             ).to(device)
 
-            if hasattr(refiner, "enable_xformers_memory_efficient_attention"):
+            if XFORMERS_AVAILABLE and hasattr(refiner, "enable_xformers_memory_efficient_attention"):
                 refiner.enable_xformers_memory_efficient_attention()
 
             if hasattr(refiner, "to") and torch.cuda.is_available():
@@ -199,14 +270,30 @@ def get_pipeline(name: str, device: str, torch_dtype):
         return CACHE[name]
 
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to load model '{name}': {str(e)}"
-        )
+        error_msg = f"Failed to load model '{name}': {str(e)}"
 
+        # If xformers error, provide more helpful message
+        if "xformers" in str(e).lower():
+            error_msg += (
+                ". This appears to be an xformers compatibility issue. "
+                "You can either install xformers with 'pip install xformers', "
+                "or run the server without xformers optimization."
+            )
+
+        print(f"Error loading model: {error_msg}")
+        if preloading:
+            # When preloading, just return the error without raising an exception
+            return None
+        else:
+            raise HTTPException(status_code=500, detail=error_msg)
+
+# Endpoint handlers
 @app.get("/")
 async def root():
-    return {"message": "Stable Diffusion Image-to-Image API is running"}
+    return {
+        "message": "Stable Diffusion Texture Transformer API is running",
+        "available_models": AVAILABLE_MODELS,
+    }
 
 @app.get("/status", response_model=ServerStatusResponse)
 async def server_status():
@@ -214,7 +301,9 @@ async def server_status():
     response = {
         "status": "running",
         "models": list(MODELS.keys()),
+        "available_models": AVAILABLE_MODELS,
         "cuda_available": torch.cuda.is_available(),
+        "xformers_available": XFORMERS_AVAILABLE,
     }
 
     if torch.cuda.is_available():
@@ -225,12 +314,13 @@ async def server_status():
 
 @app.get("/models", response_model=List[str])
 async def list_models():
-    return list(MODELS.keys())
+    """Return list of available models that were successfully loaded"""
+    return AVAILABLE_MODELS if AVAILABLE_MODELS else list(MODELS.keys())
 
 @app.post("/generate", response_model=GenResponse)
 async def generate(req: GenRequest, background_tasks: BackgroundTasks):
     try:
-        # Send initial progress message
+        # Send initial progress message via WebSocket
         await broadcast_message(json.dumps({
             "type": "progress",
             "step": 0,
@@ -259,18 +349,31 @@ async def generate(req: GenRequest, background_tasks: BackgroundTasks):
         # Create callback for progress reporting
         callback = ProgressCallback(req.steps)
 
-        # Process with base model
-        base_out = pipe(
-            prompt=req.prompt,
-            negative_prompt=req.negative_prompt,
-            image=im,
-            num_inference_steps=req.steps,
-            guidance_scale=req.guidance_scale,
-            strength=req.strength,
-            denoising_end=0.8 if refiner else 1.0,
-            callback=callback,
-            callback_steps=1
-        ).images[0]
+        # Process with base model - try with callback first, fallback without
+        try:
+            base_out = pipe(
+                prompt=req.prompt,
+                negative_prompt=req.negative_prompt,
+                image=im,
+                num_inference_steps=req.steps,
+                guidance_scale=req.guidance_scale,
+                strength=req.strength,
+                denoising_end=0.8 if refiner else 1.0,
+                callback=callback,
+                callback_steps=1
+            ).images[0]
+        except Exception as pipe_err:
+            print(f"Error with callback, trying without: {pipe_err}")
+            # Try again without callback
+            base_out = pipe(
+                prompt=req.prompt,
+                negative_prompt=req.negative_prompt,
+                image=im,
+                num_inference_steps=req.steps,
+                guidance_scale=req.guidance_scale,
+                strength=req.strength,
+                denoising_end=0.8 if refiner else 1.0
+            ).images[0]
 
         # Process with refiner if available
         final_img = base_out
@@ -286,19 +389,31 @@ async def generate(req: GenRequest, background_tasks: BackgroundTasks):
 
             refiner_callback = ProgressCallback(10)  # 10 steps for refiner
 
-            # Modification for StableDiffusionXLAdapterPipeline
-            # Since the API might be different, we need to adapt our usage
+            # Modification for StableDiffusionXLAdapterPipeline with error handling
             try:
-                final_img = refiner(
-                    prompt=req.prompt,
-                    negative_prompt=req.negative_prompt,
-                    image=base_out,
-                    num_inference_steps=10,
-                    guidance_scale=req.guidance_scale,
-                    adapter_conditioning_scale=0.8,  # Using this instead of denoising_start
-                    callback=refiner_callback,
-                    callback_steps=1
-                ).images[0]
+                try:
+                    # First try with callback
+                    final_img = refiner(
+                        prompt=req.prompt,
+                        negative_prompt=req.negative_prompt,
+                        image=base_out,
+                        num_inference_steps=10,
+                        guidance_scale=req.guidance_scale,
+                        adapter_conditioning_scale=0.8,  # Using this instead of denoising_start
+                        callback=refiner_callback,
+                        callback_steps=1
+                    ).images[0]
+                except Exception as callback_err:
+                    print(f"Refiner callback error, trying without: {callback_err}")
+                    # Try again without callback
+                    final_img = refiner(
+                        prompt=req.prompt,
+                        negative_prompt=req.negative_prompt,
+                        image=base_out,
+                        num_inference_steps=10,
+                        guidance_scale=req.guidance_scale,
+                        adapter_conditioning_scale=0.8
+                    ).images[0]
             except Exception as refiner_error:
                 print(f"Refiner error: {str(refiner_error)}")
                 # If the adapter approach fails, fall back to using base_out
@@ -326,7 +441,11 @@ async def generate(req: GenRequest, background_tasks: BackgroundTasks):
         return {"image": f"data:image/png;base64,{b64}"}
 
     except Exception as e:
-        # Send error message to websocket clients
+        print(f"Error in generate: {str(e)}")
+        import traceback
+        traceback.print_exc()
+
+        # Send error message via WebSocket
         await broadcast_message(json.dumps({
             "type": "error",
             "message": f"Error during generation: {str(e)}"
@@ -341,8 +460,8 @@ async def generate(req: GenRequest, background_tasks: BackgroundTasks):
 async def suggest(req: SuggestRequest):
     try:
         p = req.partial_prompt.lower()
-        sug = [s for s in EXAMPLE_PROMPTS if p in s.lower()][:5]
-        return {"suggestions": sug or EXAMPLE_PROMPTS[:3]}
+        sug = [s for s in TEXTURE_PROMPTS if p in s.lower()][:5]
+        return {"suggestions": sug or TEXTURE_PROMPTS[:3]}
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -351,35 +470,42 @@ async def suggest(req: SuggestRequest):
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    await websocket.accept()
-    active_connections.add(websocket)
-
-    # Send initial status message
-    status_msg = {
-        "type": "status",
-        "message": "Connected to server",
-        "models": list(MODELS.keys()),
-        "cuda_available": torch.cuda.is_available()
-    }
-
-    if torch.cuda.is_available():
-        status_msg["cuda_device"] = torch.cuda.get_device_name(0)
-        status_msg["cuda_memory_gb"] = round(torch.cuda.get_device_properties(0).total_memory / 1e9, 2)
-
-    await websocket.send_text(json.dumps(status_msg))
-
+    print(f"New WebSocket connection request from {websocket.client}")
     try:
+        await websocket.accept()
+        print(f"WebSocket connection accepted for {websocket.client}")
+        active_connections.add(websocket)
+
+        # Send initial status message
+        status_msg = {
+            "type": "status",
+            "message": "Connected to server",
+            "models": list(MODELS.keys()),
+            "available_models": AVAILABLE_MODELS,
+            "cuda_available": torch.cuda.is_available(),
+            "xformers_available": XFORMERS_AVAILABLE
+        }
+
+        if torch.cuda.is_available():
+            status_msg["cuda_device"] = torch.cuda.get_device_name(0)
+            status_msg["cuda_memory_gb"] = round(torch.cuda.get_device_properties(0).total_memory / 1e9, 2)
+
+        await websocket.send_text(json.dumps(status_msg))
+
+        # Keep connection alive
         while True:
-            # Keep connection alive and handle incoming messages if needed
             data = await websocket.receive_text()
             try:
                 msg = json.loads(data)
                 if msg.get("type") == "ping":
                     await websocket.send_text(json.dumps({"type": "pong"}))
-            except:
+            except Exception as e:
+                print(f"Error processing WebSocket message: {str(e)}")
                 pass
     except WebSocketDisconnect:
-        active_connections.remove(websocket)
+        print(f"WebSocket client disconnected: {websocket.client}")
+        if websocket in active_connections:
+            active_connections.remove(websocket)
     except Exception as e:
         print(f"WebSocket error: {str(e)}")
         if websocket in active_connections:
@@ -398,11 +524,12 @@ def find_available_port(start_port=8000, max_attempts=10):
     raise RuntimeError(f"Could not find an available port after {max_attempts} attempts")
 
 def main():
-    parser = argparse.ArgumentParser(description="Run Stable Diffusion Image-to-Image API server")
+    parser = argparse.ArgumentParser(description="Run Stable Diffusion Texture Transformer API server")
     parser.add_argument("--host", type=str, default="0.0.0.0", help="Host to bind the server to")
     parser.add_argument("--port", type=int, default=8000, help="Port to bind the server to")
     parser.add_argument("--auto-port", action="store_true", help="Automatically find an available port if specified port is in use")
     parser.add_argument("--log-level", type=str, default="info", choices=["debug", "info", "warning", "error", "critical"], help="Logging level")
+    parser.add_argument("--skip-model-check", action="store_true", help="Skip checking model availability at startup")
 
     args = parser.parse_args()
 
@@ -416,13 +543,17 @@ def main():
             return 1
 
     # Print welcome message
-    print(f"Starting Stable Diffusion Image-to-Image API server on {args.host}:{port}")
-    print(f"Available models: {list(MODELS.keys())}")
+    print(f"Starting Stable Diffusion Texture Transformer API server on {args.host}:{port}")
+    print(f"Defined models: {list(MODELS.keys())}")
     print(f"CUDA available: {torch.cuda.is_available()}")
 
     if torch.cuda.is_available():
         print(f"CUDA device: {torch.cuda.get_device_name(0)}")
         print(f"CUDA memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
+
+    # Preload models if not skipped
+    if not args.skip_model_check:
+        preload_models()
 
     # Start the server
     try:
