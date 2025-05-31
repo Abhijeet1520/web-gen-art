@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="utf-8" />
+  <title>SD-XL Cam Prompt UI</title>
+  <script src="https://cdn.tailwindcss.com/3.4.4?plugins=forms"></script>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script type="module">
+    import { Card, CardContent, CardHeader } from
+      "https://esm.sh/@/components/ui/card?alias=react:react@18,react-dom:react-dom@18";
+    import { Button } from
+      "https://esm.sh/@/components/ui/button?alias=react:react@18,react-dom:react-dom@18";
+    import { Slider } from
+      "https://esm.sh/@/components/ui/slider?alias=react:react@18,react-dom:react-dom@18";
+    import { Select, SelectItem } from
+      "https://esm.sh/@/components/ui/select?alias=react:react@18,react-dom:react-dom@18";
+
+    const { useState, useEffect, useRef } = React;
+
+    function App() {
+      const [cams, setCams] = useState([]);
+      const [camId, setCamId] = useState("");
+      const [models, setModels] = useState([]);
+      const [model, setModel] = useState("sdxl_base");
+      const [prompt, setPrompt] = useState("cyber-punk cat detective, neon rain");
+      const [neg, setNeg]     = useState("blurry, watermark");
+      const [steps, setSteps] = useState(30);
+      const [gs, setGs]       = useState(7.5);
+      const [strength, setStrength] = useState(0.7);
+      const [reply, setReply] = useState("");
+      const [running, setRunning] = useState(false);
+
+      const videoRef = useRef(null);
+      const canvas   = useRef(document.createElement("canvas"));
+      let intervalId = useRef(null);
+
+      /* ---------- enumerate devices & models on load ---------- */
+      useEffect(() => {
+        navigator.mediaDevices.enumerateDevices().then(devs => {
+          const vids = devs.filter(d => d.kind === "videoinput");
+          setCams(vids);
+          setCamId(vids[0]?.deviceId || "");
+          if (!vids.length) alert("No camera found");
+        });
+        fetch("http://localhost:8000/models")
+          .then(r => r.json())
+          .then(setModels)
+          .catch(console.error);
+      }, []);
+
+      /* ---------- start / stop stream ---------- */
+      useEffect(() => {
+        if (!camId) return;
+        navigator.mediaDevices.getUserMedia({ video: { deviceId: camId } })
+          .then(stream => (videoRef.current.srcObject = stream))
+          .catch(e => alert("Camera error: " + e.message));
+        return () => {
+          videoRef.current?.srcObject?.getTracks().forEach(t => t.stop());
+        };
+      }, [camId]);
+
+      /* ---------- core call ---------- */
+      async function tick() {
+        if (!running) return;
+        const v = videoRef.current;
+        if (!v?.videoWidth) return;
+        canvas.current.width  = v.videoWidth;
+        canvas.current.height = v.videoHeight;
+        canvas.current.getContext("2d").drawImage(v, 0, 0);
+        const b64 = canvas.current.toDataURL("image/jpeg", 0.8);
+
+        const payload = {
+          model, prompt, negative_prompt: neg,
+          steps, guidance_scale: gs, strength,
+          width: 1024, height: 768, image_b64: b64,
+        };
+        try {
+          const r = await fetch("http://localhost:8000/generate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          if (!r.ok) throw new Error(await r.text());
+          const data = await r.json();
+          setReply(data.image);
+        } catch (err) {
+          console.error(err);
+        }
+      }
+
+      /* ---------- start / stop loop ---------- */
+      function toggle() {
+        if (running) {
+          clearInterval(intervalId.current);
+          setRunning(false);
+          return;
+        }
+        setRunning(true);
+        tick();                       // immediate
+        intervalId.current = setInterval(tick, 1500);
+      }
+
+      /* ---------- suggestions ---------- */
+      async function getSug(txt) {
+        const r = await fetch("http://localhost:8000/suggest", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ partial_prompt: txt }),
+        });
+        if (!r.ok) return [];
+        return (await r.json()).suggestions;
+      }
+
+      return (
+        <div className="min-h-screen bg-muted flex flex-col items-center p-6 gap-6">
+          <h1 className="text-3xl font-bold">SD-XL Camera Demo</h1>
+
+          {/* --- controls --- */}
+          <Card className="w-full max-w-4xl">
+            <CardHeader className="font-semibold">Controls</CardHeader>
+            <CardContent className="space-y-4">
+
+              {/* camera + model row */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <Select value={camId} onValueChange={setCamId} label="Camera">
+                  {cams.map(c =>
+                    <SelectItem key={c.deviceId} value={c.deviceId}>{c.label||"Camera"}</SelectItem>
+                  )}
+                </Select>
+
+                <Select value={model} onValueChange={setModel} label="Model">
+                  {models.map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
+                </Select>
+              </div>
+
+              {/* prompt + negative */}
+              <textarea value={prompt}
+                onChange={e => setPrompt(e.target.value)}
+                rows="2" placeholder="Prompt"
+                className="w-full rounded-md border p-2" />
+
+              <textarea value={neg}
+                onChange={e => setNeg(e.target.value)}
+                rows="1" placeholder="Negative prompt"
+                className="w-full rounded-md border p-2" />
+
+              {/* sliders */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <Slider value={[steps]} min={10} max={60} step={1}
+                        onValueChange={v => setSteps(v[0])}
+                        label={`Steps (${steps})`} />
+                <Slider value={[gs]} min={1} max={15} step={0.5}
+                        onValueChange={v => setGs(v[0])}
+                        label={`Guidance (${gs})`} />
+                <Slider value={[strength]} min={0.1} max={1} step={0.05}
+                        onValueChange={v => setStrength(v[0])}
+                        label={`Strength (${strength})`} />
+              </div>
+
+              {/* buttons */}
+              <div className="flex gap-4">
+                <Button variant={running ? "destructive" : "default"} onClick={toggle}>
+                  {running ? "Stop" : "Start"}
+                </Button>
+                <Button variant="secondary" onClick={() => getSug(prompt).then(s =>
+                  alert("Suggestions:\n" + s.join("\n")))}>Suggest Prompt</Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* --- live feeds --- */}
+          <div className="flex flex-col md:flex-row gap-6">
+            <video ref={videoRef} autoPlay playsInline
+                   className="rounded-lg border shadow-lg w-[480px]"></video>
+            {reply && <img src={reply} className="rounded-lg border shadow-lg w-[480px]" />}
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.body).render(<App />);
+  </script>
+</head>
+<body class="h-full"></body>
+</html>
