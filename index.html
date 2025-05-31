@@ -1,414 +1,566 @@
 <!DOCTYPE html>
-<html lang="en" class="h-full">
+<html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <title>SD-XL Cam Prompt UI</title>
-  <script src="https://cdn.tailwindcss.com/3.4.4?plugins=forms"></script>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SD-XL Camera Demo</title>
+  <!-- Bootstrap CSS -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  <!-- Custom CSS -->
+  <style>
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background-color: #f8f9fa;
+      padding: 20px;
+    }
+    .header {
+      text-align: center;
+      margin-bottom: 30px;
+    }
+    .feed-container {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 20px;
+      margin-bottom: 20px;
+    }
+    .video-feed, .generated-image {
+      width: 512px;
+      height: 384px;
+      overflow: hidden;
+      border-radius: 8px;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+      background-color: #000;
+      position: relative;
+    }
+    .feed-label {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      background-color: rgba(0,0,0,0.5);
+      color: white;
+      padding: 5px 10px;
+      border-radius: 4px;
+      font-size: 12px;
+    }
+    .video-feed video, .generated-image img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    .control-panel {
+      background-color: white;
+      border-radius: 8px;
+      padding: 20px;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+      margin-bottom: 20px;
+    }
+    .slider-container {
+      margin-bottom: 15px;
+    }
+    .slider-value {
+      width: 40px;
+      display: inline-block;
+      text-align: right;
+    }
+    .btn-start {
+      background-color: #28a745;
+      color: white;
+    }
+    .btn-stop {
+      background-color: #dc3545;
+      color: white;
+    }
+    .status-badge {
+      font-size: 12px;
+      padding: 5px 10px;
+      border-radius: 20px;
+    }
+    .status-online {
+      background-color: #d4edda;
+      color: #155724;
+    }
+    .status-offline {
+      background-color: #f8d7da;
+      color: #721c24;
+    }
+    .prompt-suggestions {
+      cursor: pointer;
+      user-select: none;
+    }
+    .prompt-suggestions:hover {
+      text-decoration: underline;
+    }
+    .api-status {
+      position: fixed;
+      top: 10px;
+      right: 10px;
+      z-index: 1000;
+    }
+    @media (max-width: 1100px) {
+      .feed-container {
+        flex-direction: column;
+        align-items: center;
+      }
+      .video-feed, .generated-image {
+        width: 100%;
+        max-width: 512px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="api-status">
+      <span id="apiStatusBadge" class="badge status-offline">API Offline</span>
+    </div>
 
-  <!-- Use direct script tags for React instead of importmap -->
-  <script src="https://unpkg.com/react@18.2.0/umd/react.development.js"></script>
-  <script src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.development.js"></script>
+    <div class="header">
+      <h1>SD-XL Camera Demo</h1>
+      <p class="text-muted">Real-time image-to-image generation with Stable Diffusion</p>
+    </div>
 
-  <!-- Add basic shadcn components -->
-  <script src="https://unpkg.com/@radix-ui/react-slot@1.0.2/dist/index.umd.js"></script>
-  <script src="https://unpkg.com/class-variance-authority@0.7.0/dist/index.umd.js"></script>
-  <script src="https://unpkg.com/clsx@2.0.0/dist/clsx.min.js"></script>
+    <div class="feed-container">
+      <div class="video-feed">
+        <span class="feed-label">Camera</span>
+        <video id="videoFeed" autoplay playsinline></video>
+      </div>
+      <div class="generated-image">
+        <span class="feed-label">Generated</span>
+        <img id="generatedImage" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=">
+      </div>
+    </div>
+
+    <div class="control-panel">
+      <div class="row mb-3">
+        <div class="col-md-6">
+          <label for="cameraSelect" class="form-label">Camera</label>
+          <select id="cameraSelect" class="form-select"></select>
+        </div>
+        <div class="col-md-6">
+          <label for="modelSelect" class="form-label">Model</label>
+          <select id="modelSelect" class="form-select">
+            <option value="offline_mode">Offline Mode</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="row mb-3">
+        <div class="col-12">
+          <label for="promptInput" class="form-label">Prompt</label>
+          <div class="input-group">
+            <input type="text" id="promptInput" class="form-control" value="cyber-punk cat detective, neon rain">
+            <button class="btn btn-outline-secondary" type="button" id="suggestButton">Suggest</button>
+          </div>
+          <div id="promptSuggestions" class="mt-1 small text-muted"></div>
+        </div>
+      </div>
+
+      <div class="row mb-3">
+        <div class="col-12">
+          <label for="negativePromptInput" class="form-label">Negative Prompt</label>
+          <input type="text" id="negativePromptInput" class="form-control" value="blurry, watermark">
+        </div>
+      </div>
+
+      <div class="row mb-3">
+        <div class="col-md-4">
+          <div class="slider-container">
+            <label for="stepsSlider" class="form-label">Steps: <span id="stepsValue" class="slider-value">30</span></label>
+            <input type="range" class="form-range" id="stepsSlider" min="10" max="60" step="1" value="30">
+          </div>
+        </div>
+        <div class="col-md-4">
+          <div class="slider-container">
+            <label for="guidanceSlider" class="form-label">Guidance: <span id="guidanceValue" class="slider-value">7.5</span></label>
+            <input type="range" class="form-range" id="guidanceSlider" min="1" max="15" step="0.5" value="7.5">
+          </div>
+        </div>
+        <div class="col-md-4">
+          <div class="slider-container">
+            <label for="strengthSlider" class="form-label">Strength: <span id="strengthValue" class="slider-value">0.7</span></label>
+            <input type="range" class="form-range" id="strengthSlider" min="0.1" max="1" step="0.05" value="0.7">
+          </div>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="col-md-4">
+          <button id="toggleButton" class="btn btn-start w-100">Start</button>
+        </div>
+        <div class="col-md-4">
+          <button id="offlineModeButton" class="btn btn-outline-secondary w-100">Toggle Offline Mode</button>
+        </div>
+        <div class="col-md-4">
+          <div class="input-group">
+            <span class="input-group-text">API URL</span>
+            <input type="text" id="apiUrlInput" class="form-control" value="http://localhost:8000">
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Hidden canvas for image capture -->
+  <canvas id="captureCanvas" style="display:none;"></canvas>
+
+  <!-- Bootstrap JS Bundle with Popper -->
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
 
   <script>
-    // Define simple UI components that don't rely on the shadcn imports
-    function Card(props) {
-      return React.createElement('div', { className: 'bg-white rounded-lg border shadow-sm ' + (props.className || '') }, props.children);
+    // DOM Elements
+    const video = document.getElementById('videoFeed');
+    const generatedImage = document.getElementById('generatedImage');
+    const canvas = document.getElementById('captureCanvas');
+    const cameraSelect = document.getElementById('cameraSelect');
+    const modelSelect = document.getElementById('modelSelect');
+    const promptInput = document.getElementById('promptInput');
+    const negativePromptInput = document.getElementById('negativePromptInput');
+    const stepsSlider = document.getElementById('stepsSlider');
+    const guidanceSlider = document.getElementById('guidanceSlider');
+    const strengthSlider = document.getElementById('strengthSlider');
+    const stepsValue = document.getElementById('stepsValue');
+    const guidanceValue = document.getElementById('guidanceValue');
+    const strengthValue = document.getElementById('strengthValue');
+    const toggleButton = document.getElementById('toggleButton');
+    const offlineModeButton = document.getElementById('offlineModeButton');
+    const apiUrlInput = document.getElementById('apiUrlInput');
+    const apiStatusBadge = document.getElementById('apiStatusBadge');
+    const suggestButton = document.getElementById('suggestButton');
+    const promptSuggestions = document.getElementById('promptSuggestions');
+
+    // App State
+    let isRunning = false;
+    let isOfflineMode = true;
+    let apiAvailable = false;
+    let processingInterval = null;
+    let apiCheckInterval = null;
+    let cameraStream = null;
+
+    // Helper Functions
+    function updateSliderLabels() {
+      stepsValue.textContent = stepsSlider.value;
+      guidanceValue.textContent = guidanceSlider.value;
+      strengthValue.textContent = strengthSlider.value;
     }
 
-    function CardHeader(props) {
-      return React.createElement('div', { className: 'px-6 py-4 border-b ' + (props.className || '') }, props.children);
-    }
+    function updateApiStatus(status) {
+      apiAvailable = status;
 
-    function CardContent(props) {
-      return React.createElement('div', { className: 'px-6 py-4 ' + (props.className || '') }, props.children);
-    }
-
-    function Button(props) {
-      const baseClasses = 'inline-flex items-center justify-center rounded-md px-4 py-2 text-sm font-medium';
-      let variantClasses = 'bg-primary text-primary-foreground shadow hover:bg-primary/90';
-
-      if (props.variant === 'destructive') {
-        variantClasses = 'bg-red-500 text-white hover:bg-red-600';
-      } else if (props.variant === 'secondary') {
-        variantClasses = 'bg-gray-200 text-gray-900 hover:bg-gray-300';
-      } else if (props.variant === 'outline') {
-        variantClasses = 'border border-gray-300 bg-transparent hover:bg-gray-100';
-      } else if (props.variant === 'link') {
-        variantClasses = 'text-blue-500 underline-offset-4 hover:underline';
+      if (status) {
+        apiStatusBadge.textContent = 'API Online';
+        apiStatusBadge.className = 'badge status-online';
+      } else {
+        apiStatusBadge.textContent = 'API Offline';
+        apiStatusBadge.className = 'badge status-offline';
       }
 
-      if (props.size === 'sm') {
-        variantClasses += ' px-3 py-1 text-xs';
+      // Update UI states based on API availability
+      if (!isOfflineMode) {
+        const controlsDisabled = !apiAvailable;
+        modelSelect.disabled = controlsDisabled;
+        promptInput.disabled = controlsDisabled;
+        negativePromptInput.disabled = controlsDisabled;
+        stepsSlider.disabled = controlsDisabled;
+        guidanceSlider.disabled = controlsDisabled;
+        strengthSlider.disabled = controlsDisabled;
+        suggestButton.disabled = controlsDisabled;
+      }
+    }
+
+    function toggleOfflineMode() {
+      isOfflineMode = !isOfflineMode;
+
+      if (isOfflineMode) {
+        offlineModeButton.textContent = 'Try API Mode';
+        offlineModeButton.classList.add('btn-outline-primary');
+        offlineModeButton.classList.remove('btn-outline-secondary');
+      } else {
+        offlineModeButton.textContent = 'Use Offline Mode';
+        offlineModeButton.classList.remove('btn-outline-primary');
+        offlineModeButton.classList.add('btn-outline-secondary');
+        checkApiAvailability(); // Try to connect to API when switching to online mode
       }
 
-      const finalClassName = `${baseClasses} ${variantClasses} ${props.disabled ? 'opacity-50 cursor-not-allowed' : ''} ${props.className || ''}`;
-
-      return React.createElement('button', {
-        className: finalClassName,
-        onClick: props.onClick,
-        disabled: props.disabled
-      }, props.children);
+      // Enable/disable controls based on mode
+      const controlsDisabled = isOfflineMode || !apiAvailable;
+      modelSelect.disabled = controlsDisabled;
+      promptInput.disabled = controlsDisabled;
+      negativePromptInput.disabled = controlsDisabled;
+      stepsSlider.disabled = controlsDisabled;
+      guidanceSlider.disabled = controlsDisabled;
+      strengthSlider.disabled = controlsDisabled;
+      suggestButton.disabled = controlsDisabled;
     }
 
-    function Select(props) {
-      return React.createElement('div', { className: 'relative' },
-        React.createElement('label', { className: 'block text-sm font-medium mb-1' }, props.label),
-        React.createElement('select', {
-          className: 'w-full rounded-md border p-2',
-          value: props.value,
-          onChange: (e) => props.onValueChange(e.target.value),
-          disabled: props.disabled
-        }, props.children)
-      );
+    // Camera Setup
+    async function setupCameras() {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videoDevices = devices.filter(device => device.kind === 'videoinput');
+
+        cameraSelect.innerHTML = '';
+        videoDevices.forEach(device => {
+          const option = document.createElement('option');
+          option.value = device.deviceId;
+          option.text = device.label || `Camera ${cameraSelect.length + 1}`;
+          cameraSelect.appendChild(option);
+        });
+
+        if (videoDevices.length > 0) {
+          startCamera(videoDevices[0].deviceId);
+        } else {
+          alert('No cameras found on your device');
+        }
+      } catch (error) {
+        console.error('Error accessing cameras:', error);
+        alert('Error accessing cameras. Please ensure you have granted camera permissions.');
+      }
     }
 
-    function SelectItem(props) {
-      return React.createElement('option', { value: props.value }, props.children);
-    }
+    async function startCamera(deviceId) {
+      // Stop any existing stream
+      if (cameraStream) {
+        cameraStream.getTracks().forEach(track => track.stop());
+      }
 
-    function Slider(props) {
-      return React.createElement('div', { className: 'w-full' },
-        React.createElement('label', { className: 'block text-sm font-medium mb-1' }, props.label),
-        React.createElement('input', {
-          type: 'range',
-          min: props.min,
-          max: props.max,
-          step: props.step,
-          value: props.value[0],
-          onChange: (e) => props.onValueChange([parseFloat(e.target.value)]),
-          className: 'w-full',
-          disabled: props.disabled
-        })
-      );
-    }
-  </script>
-
-  <script>
-    // Main app logic
-    document.addEventListener('DOMContentLoaded', function() {
-      const { useState, useEffect, useRef } = React;
-
-      function App() {
-        const [cams, setCams] = useState([]);
-        const [camId, setCamId] = useState("");
-        const [models, setModels] = useState([]);
-        const [model, setModel] = useState("sdxl_base");
-        const [prompt, setPrompt] = useState("cyber-punk cat detective, neon rain");
-        const [neg, setNeg] = useState("blurry, watermark");
-        const [steps, setSteps] = useState(30);
-        const [gs, setGs] = useState(7.5);
-        const [strength, setStrength] = useState(0.7);
-        const [reply, setReply] = useState("");
-        const [running, setRunning] = useState(false);
-        const [apiAvailable, setApiAvailable] = useState(true);
-        const [offlineMode, setOfflineMode] = useState(false);
-
-        const videoRef = useRef(null);
-        const canvas = useRef(document.createElement("canvas"));
-        let intervalId = useRef(null);
-        let apiCheckId = useRef(null);
-
-        /* ---------- enumerate devices & models on load ---------- */
-        useEffect(() => {
-          navigator.mediaDevices.enumerateDevices().then(devs => {
-            const vids = devs.filter(d => d.kind === "videoinput");
-            setCams(vids);
-            setCamId(vids[0]?.deviceId || "");
-            if (!vids.length) alert("No camera found");
-          });
-
-          checkApiAvailability();
-        }, []);
-
-        /* ---------- check if API is available ---------- */
-        const checkApiAvailability = () => {
-          fetch("http://localhost:8000/models")
-            .then(r => r.json())
-            .then(data => {
-              setModels(data);
-              setApiAvailable(true);
-              if (offlineMode) {
-                console.log("API is now available");
-              }
-            })
-            .catch(err => {
-              console.log("API unavailable:", err);
-              setApiAvailable(false);
-              if (models.length === 0) {
-                setModels(["offline_mode"]);
-                setModel("offline_mode");
-              }
-            });
+      try {
+        const constraints = {
+          video: { deviceId: deviceId ? { exact: deviceId } : undefined }
         };
 
-        /* ---------- start / stop stream ---------- */
-        useEffect(() => {
-          if (!camId) return;
-          navigator.mediaDevices.getUserMedia({ video: { deviceId: camId } })
-            .then(stream => (videoRef.current.srcObject = stream))
-            .catch(e => alert("Camera error: " + e.message));
-          return () => {
-            videoRef.current?.srcObject?.getTracks().forEach(t => t.stop());
-          };
-        }, [camId]);
+        cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
+        video.srcObject = cameraStream;
+      } catch (error) {
+        console.error('Error starting camera:', error);
+        alert('Error starting camera. Please check your permissions and try again.');
+      }
+    }
 
-        /* ---------- core call ---------- */
-        async function tick() {
-          if (!running) return;
-          const v = videoRef.current;
-          if (!v?.videoWidth) return;
-          canvas.current.width = v.videoWidth;
-          canvas.current.height = v.videoHeight;
-          canvas.current.getContext("2d").drawImage(v, 0, 0);
-          const b64 = canvas.current.toDataURL("image/jpeg", 0.8);
+    // API Communication
+    async function checkApiAvailability() {
+      try {
+        const response = await fetch(`${apiUrlInput.value}/models`, {
+          method: 'GET',
+          headers: { 'Accept': 'application/json' }
+        });
 
-          // In offline mode, just display the camera feed
-          if (offlineMode || !apiAvailable) {
-            setReply(b64);
-            return;
-          }
+        if (response.ok) {
+          const models = await response.json();
+          updateApiStatus(true);
 
-          const payload = {
-            model, prompt, negative_prompt: neg,
-            steps, guidance_scale: gs, strength,
-            width: 1024, height: 768, image_b64: b64,
-          };
-          try {
-            const r = await fetch("http://localhost:8000/generate", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(payload),
-            });
-            if (!r.ok) throw new Error(await r.text());
-            const data = await r.json();
-            setReply(data.image);
+          // Update model selection dropdown
+          modelSelect.innerHTML = '';
+          models.forEach(model => {
+            const option = document.createElement('option');
+            option.value = model;
+            option.text = model;
+            modelSelect.appendChild(option);
+          });
 
-            // If we got here, API is available
-            if (!apiAvailable) {
-              setApiAvailable(true);
-            }
-          } catch (err) {
-            console.error(err);
-            setApiAvailable(false);
-            setReply(b64); // Fallback to showing original image
-          }
+          // Add offline mode option
+          const offlineOption = document.createElement('option');
+          offlineOption.value = 'offline_mode';
+          offlineOption.text = 'Offline Mode';
+          modelSelect.appendChild(offlineOption);
+
+          return true;
+        } else {
+          throw new Error('API returned error status');
         }
+      } catch (error) {
+        console.error('API check failed:', error);
+        updateApiStatus(false);
 
-        /* ---------- start / stop loop ---------- */
-        function toggle() {
-          if (running) {
-            clearInterval(intervalId.current);
-            if (apiCheckId.current) clearInterval(apiCheckId.current);
-            setRunning(false);
-            return;
-          }
+        // Ensure we have at least the offline option
+        modelSelect.innerHTML = '';
+        const offlineOption = document.createElement('option');
+        offlineOption.value = 'offline_mode';
+        offlineOption.text = 'Offline Mode';
+        modelSelect.appendChild(offlineOption);
 
-          setRunning(true);
-          tick();                       // immediate
-          intervalId.current = setInterval(tick, 1500);
+        return false;
+      }
+    }
 
-          // If in offline mode, periodically check if API becomes available
-          if (!apiAvailable && !apiCheckId.current) {
-            apiCheckId.current = setInterval(checkApiAvailability, 10000); // Check every 10s
-          }
-        }
+    function captureImage() {
+      if (!video.videoWidth) return null;
 
-        /* ---------- toggle offline mode ---------- */
-        function toggleOfflineMode() {
-          setOfflineMode(!offlineMode);
-          if (offlineMode) {
-            // If turning off offline mode, check if API is available
-            checkApiAvailability();
-          }
-        }
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0);
 
-        /* ---------- suggestions ---------- */
-        async function getSug(txt) {
-          // Fallback suggestions when offline
-          const fallbackSugs = [
-            "cyber-punk cat detective, neon rain",
-            "steampunk airship over Victorian London",
-            "hyper-realistic portrait, 85mm lens, soft lighting"
-          ];
+      return canvas.toDataURL('image/jpeg', 0.8);
+    }
 
-          if (offlineMode || !apiAvailable) {
-            alert("Suggestions (offline mode):\n" + fallbackSugs.join("\n"));
-            return;
-          }
+    async function processFrame() {
+      if (!isRunning) return;
 
-          try {
-            const r = await fetch("http://localhost:8000/suggest", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ partial_prompt: txt }),
-            });
-            if (!r.ok) throw new Error();
-            const data = await r.json();
-            alert("Suggestions:\n" + data.suggestions.join("\n"));
-          } catch (err) {
-            setApiAvailable(false);
-            alert("API unavailable. Offline suggestions:\n" + fallbackSugs.join("\n"));
-          }
-        }
+      const imageDataUrl = captureImage();
+      if (!imageDataUrl) return;
 
-        // Create API status banner
-        const statusBannerClass = (apiAvailable && !offlineMode) ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-800';
-        const statusText = apiAvailable && !offlineMode ? 'API Connected' : offlineMode ? 'Offline Mode (Manual)' : 'API Unavailable - Using Fallback Mode';
-
-        const statusBanner = React.createElement('div', { className: `px-4 py-2 rounded-md text-sm ${statusBannerClass}` },
-          statusText,
-          (apiAvailable && !offlineMode) && React.createElement(Button, {
-            variant: "link", size: "sm", className: "ml-2 text-green-800", onClick: toggleOfflineMode
-          }, "Switch to Offline"),
-          (offlineMode || !apiAvailable) && React.createElement(Button, {
-            variant: "link", size: "sm", className: "ml-2 text-amber-800", onClick: toggleOfflineMode
-          }, offlineMode ? "Try API Mode" : "Use Offline Mode")
-        );
-
-        // Create camera selector
-        const cameraSelect = React.createElement(Select, {
-          value: camId,
-          onValueChange: setCamId,
-          label: "Camera"
-        }, cams.map(c => React.createElement(SelectItem, {
-          key: c.deviceId,
-          value: c.deviceId
-        }, c.label || "Camera")));
-
-        // Create model selector
-        const modelSelect = React.createElement(Select, {
-          value: model,
-          onValueChange: setModel,
-          label: "Model",
-          disabled: offlineMode || !apiAvailable
-        }, models.map(m => React.createElement(SelectItem, {
-          key: m,
-          value: m
-        }, m === "offline_mode" ? "Offline Mode" : m)));
-
-        // Create input controls
-        const promptTextarea = React.createElement('textarea', {
-          value: prompt,
-          onChange: e => setPrompt(e.target.value),
-          rows: "2",
-          placeholder: "Prompt",
-          className: `w-full rounded-md border p-2 ${(offlineMode || !apiAvailable) ? 'opacity-60' : ''}`,
-          disabled: offlineMode || !apiAvailable
-        });
-
-        const negativePromptTextarea = React.createElement('textarea', {
-          value: neg,
-          onChange: e => setNeg(e.target.value),
-          rows: "1",
-          placeholder: "Negative prompt",
-          className: `w-full rounded-md border p-2 ${(offlineMode || !apiAvailable) ? 'opacity-60' : ''}`,
-          disabled: offlineMode || !apiAvailable
-        });
-
-        // Create sliders
-        const stepsSlider = React.createElement(Slider, {
-          value: [steps],
-          min: 10,
-          max: 60,
-          step: 1,
-          onValueChange: v => setSteps(v[0]),
-          label: `Steps (${steps})`,
-          disabled: offlineMode || !apiAvailable
-        });
-
-        const guidanceSlider = React.createElement(Slider, {
-          value: [gs],
-          min: 1,
-          max: 15,
-          step: 0.5,
-          onValueChange: v => setGs(v[0]),
-          label: `Guidance (${gs})`,
-          disabled: offlineMode || !apiAvailable
-        });
-
-        const strengthSlider = React.createElement(Slider, {
-          value: [strength],
-          min: 0.1,
-          max: 1,
-          step: 0.05,
-          onValueChange: v => setStrength(v[0]),
-          label: `Strength (${strength})`,
-          disabled: offlineMode || !apiAvailable
-        });
-
-        // Create buttons
-        const startStopButton = React.createElement(Button, {
-          variant: running ? "destructive" : "default",
-          onClick: toggle
-        }, running ? "Stop" : "Start");
-
-        const suggestButton = React.createElement(Button, {
-          variant: "secondary",
-          onClick: () => getSug(prompt)
-        }, "Suggest Prompt");
-
-        const offlineModeButton = React.createElement(Button, {
-          variant: offlineMode ? "default" : "outline",
-          onClick: toggleOfflineMode
-        }, offlineMode ? "Try API Mode" : "Use Offline Mode");
-
-        // Create video and image elements
-        const videoElement = React.createElement('video', {
-          ref: videoRef,
-          autoPlay: true,
-          playsInline: true,
-          className: "rounded-lg border shadow-lg w-[480px]"
-        });
-
-        const imageElement = reply ? React.createElement('img', {
-          src: reply,
-          className: "rounded-lg border shadow-lg w-[480px]"
-        }) : null;
-
-        // Construct the UI
-        return React.createElement('div', { className: "min-h-screen bg-muted flex flex-col items-center p-6 gap-6" },
-          React.createElement('h1', { className: "text-3xl font-bold" }, "SD-XL Camera Demo"),
-          statusBanner,
-          React.createElement(Card, { className: "w-full max-w-4xl" },
-            React.createElement(CardHeader, { className: "font-semibold" }, "Controls"),
-            React.createElement(CardContent, { className: "space-y-4" },
-              React.createElement('div', { className: "grid grid-cols-1 md:grid-cols-2 gap-4" },
-                cameraSelect,
-                modelSelect
-              ),
-              promptTextarea,
-              negativePromptTextarea,
-              React.createElement('div', { className: "grid grid-cols-1 md:grid-cols-3 gap-6" },
-                stepsSlider,
-                guidanceSlider,
-                strengthSlider
-              ),
-              React.createElement('div', { className: "flex gap-4" },
-                startStopButton,
-                suggestButton,
-                offlineModeButton
-              )
-            )
-          ),
-          React.createElement('div', { className: "flex flex-col md:flex-row gap-6" },
-            videoElement,
-            imageElement
-          )
-        );
+      // In offline mode, just display the camera feed
+      if (isOfflineMode || !apiAvailable) {
+        generatedImage.src = imageDataUrl;
+        return;
       }
 
-      // Render the app
-      const rootElement = document.getElementById('app');
-      ReactDOM.render(React.createElement(App), rootElement);
+      try {
+        const response = await fetch(`${apiUrlInput.value}/generate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: modelSelect.value,
+            prompt: promptInput.value,
+            negative_prompt: negativePromptInput.value,
+            steps: parseInt(stepsSlider.value),
+            guidance_scale: parseFloat(guidanceSlider.value),
+            strength: parseFloat(strengthSlider.value),
+            width: 512,
+            height: 512,
+            image_b64: imageDataUrl
+          })
+        });
+
+        if (!response.ok) {
+          throw new Error(`API error: ${response.status}`);
+        }
+
+        const data = await response.json();
+        generatedImage.src = data.image;
+
+        // If we got here, API is available
+        if (!apiAvailable) {
+          updateApiStatus(true);
+        }
+      } catch (error) {
+        console.error('Error processing image:', error);
+        generatedImage.src = imageDataUrl; // Fallback to showing camera feed
+        updateApiStatus(false);
+      }
+    }
+
+    async function getSuggestions() {
+      // Fallback suggestions when offline
+      const fallbackSuggestions = [
+        "cyber-punk cat detective, neon rain",
+        "steampunk airship over Victorian London",
+        "hyper-realistic portrait, 85mm lens, soft lighting"
+      ];
+
+      if (isOfflineMode || !apiAvailable) {
+        displaySuggestions(fallbackSuggestions);
+        return;
+      }
+
+      try {
+        const response = await fetch(`${apiUrlInput.value}/suggest`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            partial_prompt: promptInput.value
+          })
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to get suggestions');
+        }
+
+        const data = await response.json();
+        displaySuggestions(data.suggestions);
+      } catch (error) {
+        console.error('Error getting suggestions:', error);
+        updateApiStatus(false);
+        displaySuggestions(fallbackSuggestions);
+      }
+    }
+
+    function displaySuggestions(suggestions) {
+      promptSuggestions.innerHTML = '';
+
+      suggestions.forEach(suggestion => {
+        const span = document.createElement('span');
+        span.className = 'badge bg-light text-dark me-1 mb-1 prompt-suggestions';
+        span.textContent = suggestion;
+        span.addEventListener('click', () => {
+          promptInput.value = suggestion;
+        });
+        promptSuggestions.appendChild(span);
+      });
+    }
+
+    // Toggle Processing
+    function toggleProcessing() {
+      isRunning = !isRunning;
+
+      if (isRunning) {
+        toggleButton.textContent = 'Stop';
+        toggleButton.classList.remove('btn-start');
+        toggleButton.classList.add('btn-stop');
+
+        // Start processing frames
+        processFrame(); // Process one frame immediately
+        processingInterval = setInterval(processFrame, 1500);
+
+        // If in API mode, periodically check if API becomes available
+        if (!isOfflineMode && !apiAvailable && !apiCheckInterval) {
+          apiCheckInterval = setInterval(checkApiAvailability, 10000);
+        }
+      } else {
+        toggleButton.textContent = 'Start';
+        toggleButton.classList.remove('btn-stop');
+        toggleButton.classList.add('btn-start');
+
+        // Stop processing
+        clearInterval(processingInterval);
+        clearInterval(apiCheckInterval);
+        apiCheckInterval = null;
+      }
+    }
+
+    // Event Listeners
+    document.addEventListener('DOMContentLoaded', () => {
+      // Initialize camera
+      setupCameras();
+
+      // Initialize sliders
+      updateSliderLabels();
+
+      // Set initial UI state
+      toggleOfflineMode();
+
+      // Check API availability
+      checkApiAvailability();
+
+      // Add event listeners
+      cameraSelect.addEventListener('change', () => {
+        startCamera(cameraSelect.value);
+      });
+
+      toggleButton.addEventListener('click', toggleProcessing);
+
+      offlineModeButton.addEventListener('click', toggleOfflineMode);
+
+      apiUrlInput.addEventListener('change', checkApiAvailability);
+
+      suggestButton.addEventListener('click', getSuggestions);
+
+      // Slider value updates
+      stepsSlider.addEventListener('input', updateSliderLabels);
+      guidanceSlider.addEventListener('input', updateSliderLabels);
+      strengthSlider.addEventListener('input', updateSliderLabels);
+    });
+
+    // Clean up on page unload
+    window.addEventListener('beforeunload', () => {
+      if (cameraStream) {
+        cameraStream.getTracks().forEach(track => track.stop());
+      }
+
+      clearInterval(processingInterval);
+      clearInterval(apiCheckInterval);
     });
   </script>
-</head>
-<body class="h-full">
-  <div id="app"></div>
 </body>
 </html>
