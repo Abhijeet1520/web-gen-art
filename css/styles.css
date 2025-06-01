@@ -134,9 +134,13 @@ body {
 /* Toast notification styles */
 .toast-container {
   position: fixed;
-  top: 20px;
+  bottom: 20px;  /* Changed from top to bottom */
   right: 20px;
   z-index: 9999;
+  max-height: 70vh; /* Maximum height constraint */
+  overflow-y: auto; /* Enable scrolling if there are many toasts */
+  display: flex;
+  flex-direction: column-reverse; /* Newer toasts at the bottom */
 }
 .toast {
   background-color: white;
@@ -148,7 +152,7 @@ body {
   max-width: 350px;
   display: flex;
   opacity: 0;
-  transform: translateY(-20px);
+  transform: translateY(20px);
   transition: all 0.3s ease;
 }
 .toast.show {
