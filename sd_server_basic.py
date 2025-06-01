@@ -180,16 +180,16 @@ class SuggestResponse(BaseModel):
 
 # Example prompts for texture transformations
 TEXTURE_PROMPTS = [
-    "medieval stone castle with torch-lit walls and wooden beams, highly detailed",
-    "tropical jungle environment with lush vegetation overtaking furniture",
-    "futuristic cyberpunk room with neon lights and holographic displays",
-    "winter wonderland with snow-covered surfaces and icicles hanging",
-    "underwater scene with coral reefs, seaweed, and bubbles floating upward",
-    "ancient temple with moss-covered stone walls and golden artifacts",
-    "steampunk workshop with brass gears, copper pipes, and vintage machinery",
-    "fantasy crystal cave with glowing gems embedded in the walls",
-    "post-apocalyptic abandoned room with plant overgrowth and decay",
-    "luxury gold and marble palace with ornate decorations and columns"
+    "transform this space into a medieval stone castle with torch-lit walls, wooden beams, and weathered stone textures, highly detailed",
+    "convert this scene to a tropical jungle environment with lush vegetation overtaking existing structures, vines climbing walls, moss on surfaces",
+    "change current environment to futuristic cyberpunk with neon-lit edges, holographic displays replacing existing frames, metallic surfaces",
+    "transform this into a winter wonderland with snow-covered surfaces, icicles hanging from edges, frosted windows, soft blue lighting",
+    "convert this area to an underwater scene with coral reefs growing on structures, seaweed replacing vertical elements, bubbles floating upward",
+    "change this setting to an ancient temple with moss-covered stone walls, hieroglyphics carved into surfaces, golden artifacts scattered about",
+    "transform current scene into a steampunk workshop with brass gears on walls, copper pipes replacing fixtures, vintage machinery integrated",
+    "convert this space to a fantasy crystal cave with glowing gems embedded in walls, crystalline formations replacing furniture, ethereal lighting",
+    "transform this into a post-apocalyptic abandoned version with plant overgrowth, peeling paint, structural decay, dust particles in light beams",
+    "change this environment to a luxury gold and marble palace with ornate decorations, gilded surfaces, polished marble floors, classical columns"
 ]
 
 # --- API Endpoints

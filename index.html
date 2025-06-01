@@ -107,13 +107,16 @@
       </div>
 
       <div class="row">
-        <div class="col-md-4">
+        <div class="col-md-3">
           <button id="toggleButton" class="btn btn-start w-100">Start</button>
         </div>
-        <div class="col-md-4">
+        <div class="col-md-3">
+          <button id="captureOnceButton" class="btn btn-outline-success w-100">Capture Once</button>
+        </div>
+        <div class="col-md-3">
           <button id="offlineModeButton" class="btn btn-outline-secondary w-100">Toggle Offline Mode</button>
         </div>
-        <div class="col-md-4">
+        <div class="col-md-3">
           <div class="input-group">
             <span class="input-group-text">Request Interval</span>
             <select id="intervalSelect" class="form-select">
@@ -159,6 +162,7 @@
     const guidanceValue = document.getElementById('guidanceValue');
     const strengthValue = document.getElementById('strengthValue');
     const toggleButton = document.getElementById('toggleButton');
+    const captureOnceButton = document.getElementById('captureOnceButton');
     const offlineModeButton = document.getElementById('offlineModeButton');
     const apiUrlInput = document.getElementById('apiUrlInput');
     const apiStatusBadge = document.getElementById('apiStatusBadge');
@@ -542,7 +546,8 @@
         </div>
       `;
 
-      toastContainer.appendChild(toast);
+      // Add toast to the beginning of container to show newest at the bottom
+      toastContainer.prepend(toast);
 
       // Add close functionality
       toast.querySelector('.toast-close').addEventListener('click', () => {
@@ -560,6 +565,16 @@
           setTimeout(() => toast.remove(), 300);
         }
       }, 5000);
+
+      // Limit maximum number of toasts to prevent overflow
+      const maxToasts = 5;
+      const toasts = toastContainer.querySelectorAll('.toast');
+      if (toasts.length > maxToasts) {
+        // Remove oldest toasts (at the end of the container)
+        for (let i = maxToasts; i < toasts.length; i++) {
+          toastContainer.removeChild(toasts[i]);
+        }
+      }
     }
 
     // Camera Setup
@@ -732,12 +747,98 @@
       }
     }
 
+    async function processSingleFrame() {
+      // Don't do anything if continuous processing is already running
+      if (isRunning) {
+        showToast('warning', 'Already Running', 'Please stop continuous processing first before capturing a single frame');
+        return;
+      }
+
+      const imageDataUrl = captureImage();
+      if (!imageDataUrl) {
+        showToast('error', 'Camera Error', 'Failed to capture image from camera');
+        return;
+      }
+
+      // In offline mode, just display the camera feed
+      if (isOfflineMode || !apiAvailable || selectedModel === 'offline_mode') {
+        generatedImage.src = imageDataUrl;
+        showToast('info', 'Offline Mode', 'Image captured and displayed (offline mode)');
+        return;
+      }
+
+      try {
+        // Show processing indicator
+        updateProgressUI({
+          step: 0,
+          total: parseInt(stepsSlider.value),
+          percentage: 0,
+          status: "starting",
+          message: "Starting single frame generation"
+        });
+
+        // Temporarily set isGenerating to prevent other requests
+        isGenerating = true;
+
+        const response = await fetch(`${apiUrlInput.value}/generate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: selectedModel,
+            prompt: promptInput.value,
+            negative_prompt: negativePromptInput.value,
+            steps: parseInt(stepsSlider.value),
+            guidance_scale: parseFloat(guidanceSlider.value),
+            strength: parseFloat(strengthSlider.value),
+            width: 512,
+            height: 512,
+            image_b64: imageDataUrl
+          })
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`API error (${response.status}): ${errorText}`);
+        }
+
+        const data = await response.json();
+        generatedImage.src = data.image;
+        showToast('success', 'Generation Complete', 'Single frame processed successfully');
+
+        // If we got here, API is available
+        if (!apiAvailable) {
+          updateApiStatus(true);
+        }
+      } catch (error) {
+        console.error('Error processing image:', error);
+        generatedImage.src = imageDataUrl; // Fallback to showing camera feed
+        showToast('error', 'Generation Error', error.message);
+        updateApiStatus(false);
+      } finally {
+        // Reset the generating flag
+        isGenerating = false;
+
+        // Reset progress UI after a delay
+        setTimeout(() => {
+          updateProgressUI(null);
+        }, 2000);
+      }
+    }
+
     async function getSuggestions() {
       // Fallback suggestions when offline
+      // These texture prompts are used when the API is unavailable or in offline mode
       const fallbackSuggestions = [
-        "medieval stone castle with torch-lit walls and wooden beams",
-        "tropical jungle environment with lush vegetation",
-        "futuristic cyberpunk room with neon lights"
+        "transform this space into a medieval stone castle with torch-lit walls, wooden beams, and weathered stone textures, highly detailed",
+        "convert this scene to a tropical jungle environment with lush vegetation overtaking existing structures, vines climbing walls, moss on surfaces",
+        "change current environment to futuristic cyberpunk with neon-lit edges, holographic displays replacing existing frames, metallic surfaces",
+        "transform this into a winter wonderland with snow-covered surfaces, icicles hanging from edges, frosted windows, soft blue lighting",
+        "convert this area to an underwater scene with coral reefs growing on structures, seaweed replacing vertical elements, bubbles floating upward",
+        "change this setting to an ancient temple with moss-covered stone walls, hieroglyphics carved into surfaces, golden artifacts scattered about",
+        "transform current scene into a steampunk workshop with brass gears on walls, copper pipes replacing fixtures, vintage machinery integrated",
+        "convert this space to a fantasy crystal cave with glowing gems embedded in walls, crystalline formations replacing furniture, ethereal lighting",
+        "transform this into a post-apocalyptic abandoned version with plant overgrowth, peeling paint, structural decay, dust particles in light beams",
+        "change this environment to a luxury gold and marble palace with ornate decorations, gilded surfaces, polished marble floors, classical columns"
       ];
 
       if (isOfflineMode || !apiAvailable) {
@@ -839,6 +940,8 @@
       });
 
       toggleButton.addEventListener('click', toggleProcessing);
+
+      captureOnceButton.addEventListener('click', processSingleFrame);
 
       offlineModeButton.addEventListener('click', toggleOfflineMode);
 
