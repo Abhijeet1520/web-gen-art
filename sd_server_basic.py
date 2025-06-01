@@ -19,6 +19,9 @@ from diffusers import StableDiffusionImg2ImgPipeline, LMSDiscreteScheduler
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("sd_basic_server")
 
+os.environ['CUDA_LAUNCH_BLOCKING']="1"
+os.environ['TORCH_USE_CUDA_DSA'] = "1"
+
 # --- Model config: Simple single model setup
 MODEL_CONFIG = {
     "sd_v1_4": {
@@ -88,40 +91,22 @@ async def broadcast_message(message: str):
     for conn in disconnected:
         active_connections.remove(conn)
 
-# --- Load pipeline at startup (single model for now)
+# --- Load pipeline at startup - UPDATED to match working code exactly
 logger.info("Initializing Stable Diffusion pipeline...")
 device = "cuda" if torch.cuda.is_available() else "cpu"
-torch_dtype = torch.float16 if device == "cuda" else torch.float32
-
 model_path = MODEL_CONFIG[DEFAULT_MODEL]["repo"]
 logger.info(f"Loading model: {model_path} on {device}")
 
+# Match the working code's loading exactly
 pipe = StableDiffusionImg2ImgPipeline.from_pretrained(
     model_path,
-    torch_dtype=torch_dtype,
-    use_safetensors=True
+    torch_dtype=torch.float16 if device == "cuda" else torch.float32,
 )
 pipe = pipe.to(device)
 
 # Use LMSDiscreteScheduler as in the working notebook
-pipe.scheduler = LMSDiscreteScheduler.from_config(pipe.scheduler.config)
-
-# Disable safety checker for faster processing
-pipe.safety_checker = None
-
-# Enable optimizations if available
-try:
-    pipe.enable_xformers_memory_efficient_attention()
-    logger.info("xformers memory efficient attention enabled")
-except Exception as e:
-    logger.warning(f"Could not enable xformers: {e}")
-
-if hasattr(pipe, "to") and torch.cuda.is_available():
-    try:
-        pipe.to(memory_format=torch.channels_last)
-        logger.info("Memory format set to channels_last")
-    except Exception as e:
-        logger.warning(f"Could not set memory format: {e}")
+lms = LMSDiscreteScheduler.from_config(pipe.scheduler.config)
+pipe.scheduler = lms
 
 logger.info(f"Pipeline loaded successfully on {device}")
 
@@ -265,36 +250,19 @@ async def generate(req: GenerateRequest):
         else:
             b64_data = req.image_b64
 
-        # Decode base64 to image
+        # Decode base64 to image - Match working code's processing
         try:
             input_img = Image.open(io.BytesIO(base64.b64decode(b64_data))).convert("RGB")
-            input_img = input_img.resize((768, 512))  # Use the size from working notebook
+            input_img = input_img.resize((768, 512))  # Exact size from working notebook
         except Exception as e:
             raise HTTPException(400, f"Could not decode input image: {str(e)}")
 
-        # Create callback for progress reporting
-        callback = ProgressCallback(req.steps)
-
-        # Generate image with progress callback
+        # Generate image - Match working code's parameters
         try:
-            # Use fixed seed for reproducible results (like in notebook)
+            # Use fixed seed for reproducible results (same as notebook)
             generator = torch.Generator(device=device).manual_seed(1024)
 
-            result = pipe(
-                prompt=req.prompt,
-                negative_prompt=req.negative_prompt,
-                image=input_img,
-                strength=req.strength,
-                guidance_scale=req.guidance_scale,
-                num_inference_steps=req.steps,
-                generator=generator,
-                callback=callback,
-                callback_steps=1
-            ).images[0]
-        except Exception as pipe_err:
-            logger.warning(f"Error with callback, trying without: {pipe_err}")
-            # Try again without callback if there's an issue
-            generator = torch.Generator(device=device).manual_seed(1024)
+            # First try without callback to match notebook approach
             result = pipe(
                 prompt=req.prompt,
                 negative_prompt=req.negative_prompt,
@@ -305,12 +273,11 @@ async def generate(req: GenerateRequest):
                 generator=generator
             ).images[0]
 
-        # Encode result as data URL
-        buf = io.BytesIO()
-        result.save(buf, format="PNG")
-        b64_result = base64.b64encode(buf.getvalue()).decode("utf-8")
+        except Exception as e:
+            logger.error(f"Error in pipeline: {str(e)}")
+            raise HTTPException(500, f"Error during image generation: {str(e)}")
 
-        # Send completion message
+        # Send progress updates
         await broadcast_message(json.dumps({
             "type": "progress",
             "step": req.steps,
@@ -319,6 +286,11 @@ async def generate(req: GenerateRequest):
             "status": "completed",
             "message": "Generation complete"
         }))
+
+        # Encode result as data URL
+        buf = io.BytesIO()
+        result.save(buf, format="PNG")
+        b64_result = base64.b64encode(buf.getvalue()).decode("utf-8")
 
         return {"image": f"data:image/png;base64,{b64_result}"}
 
