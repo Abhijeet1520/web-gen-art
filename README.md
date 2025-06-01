@@ -27,9 +27,16 @@ A real-time web application that transforms room textures and environments using
    cd web-gen-art
    ```
 
+
 2. Install required packages:
    ```bash
-   pip install diffusers transformers fastapi uvicorn websockets torch pillow
+   pip install diffusers transformers fastapi uvicorn websockets torch pillow scipy
+   ```
+
+   xformers and torch versions should be compatible with your CUDA version. You can find the appropriate versions on the [PyTorch website](https://pytorch.org/get-started/locally/).
+   For example, if you have CUDA 12.8, you can install with:
+   ```bash
+   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
    ```
 
 3. Run the server:
