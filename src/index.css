@@ -1,0 +1,117 @@
+@tailwind base;
+@tailwind components;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 98%;
+    --foreground: 0 0% 3.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 3.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 3.9%;
+    --primary: 142.1 76.2% 36.3%;
+    --primary-foreground: 355.7 100% 97.3%;
+    --secondary: 0 0% 96.1%;
+    --secondary-foreground: 0 0% 9%;
+    --muted: 0 0% 96.1%;
+    --muted-foreground: 0 0% 45.1%;
+    --accent: 0 0% 96.1%;
+    --accent-foreground: 0 0% 9%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 0 0% 89.8%;
+    --input: 0 0% 89.8%;
+    --ring: 142.1 76.2% 36.3%;
+    --radius: 0.5rem;
+  }
+}
+
+body {
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  background-color: #f8f9fa;
+  padding: 20px;
+}
+
+/* Video feed related styles */
+.video-feed, .generated-image {
+  width: 512px;
+  height: 384px;
+  overflow: hidden;
+  border-radius: 8px;
+  box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+  background-color: #000;
+  position: relative;
+}
+
+.feed-label {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  background-color: rgba(0,0,0,0.5);
+  color: white;
+  padding: 5px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  z-index: 10;
+}
+
+.video-feed video, .generated-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* Progress indicator styles */
+.progress-container {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background-color: rgba(0,0,0,0.7);
+  color: white;
+  padding: 8px;
+  font-size: 12px;
+  z-index: 10;
+}
+
+.progress-bar {
+  height: 4px;
+  background-color: #28a745;
+  width: 0%;
+  transition: width 0.3s ease;
+  margin-top: 4px;
+}
+
+/* Connection status indicator */
+.connection-status .indicator {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-right: 5px;
+}
+
+.connection-status .connected {
+  background-color: #28a745;
+}
+
+.connection-status .disconnected {
+  background-color: #dc3545;
+}
+
+.connection-status .connecting {
+  background-color: #ffc107;
+  animation: blink 1s infinite;
+}
+
+@media (max-width: 1100px) {
+  .feed-container {
+    flex-direction: column;
+    align-items: center;
+  }
+  .video-feed, .generated-image {
+    width: 100%;
+    max-width: 512px;
+  }
+}
