@@ -198,33 +198,31 @@
       strengthValue.textContent = strengthSlider.value;
     }
 
+    // Update the updateApiStatus function to always update UI
     function updateApiStatus(status) {
       apiAvailable = status;
 
       // Update UI states based on API availability
       if (!isOfflineMode) {
-        const controlsDisabled = !apiAvailable;
-        promptInput.disabled = controlsDisabled;
-        negativePromptInput.disabled = controlsDisabled;
-        stepsSlider.disabled = controlsDisabled;
-        guidanceSlider.disabled = controlsDisabled;
-        strengthSlider.disabled = controlsDisabled;
-        suggestButton.disabled = controlsDisabled;
-
-        // Update model cards
-        document.querySelectorAll('.model-card').forEach(card => {
-          card.classList.toggle('disabled', controlsDisabled);
-        });
+        // Update model cards regardless of previous state
+        updateUIForCurrentMode();
 
         if (status) {
           showToast('success', 'API Connection', 'Successfully connected to the server API');
+
+          // Explicitly enable model cards when API becomes available
+          if (!apiAvailable && status) {
+            enableModelCards();
+          }
         } else {
           showToast('error', 'API Connection', 'Failed to connect to the server API. Using offline mode.');
         }
       }
     }
 
-    function toggleOfflineMode() {
+
+    // Update the toggleOfflineMode function to handle async better
+    async function toggleOfflineMode() {
       isOfflineMode = !isOfflineMode;
 
       if (isOfflineMode) {
@@ -233,14 +231,31 @@
         offlineModeButton.classList.remove('btn-outline-secondary');
         selectedModel = "offline_mode";
         showToast('info', 'Mode Changed', 'Switched to offline mode. Camera feed will be displayed without processing.');
+
+        // Immediately update UI for offline mode
+        updateUIForCurrentMode();
       } else {
         offlineModeButton.textContent = 'Use Offline Mode';
         offlineModeButton.classList.remove('btn-outline-primary');
         offlineModeButton.classList.add('btn-outline-secondary');
-        checkApiAvailability(); // Try to connect to API when switching to online mode
-        showToast('info', 'Mode Changed', 'Trying to connect to API server...');
-      }
 
+        showToast('info', 'Mode Changed', 'Trying to connect to API server...');
+
+        // Check API availability and wait for result before updating UI
+        const apiIsAvailable = await checkApiAvailability();
+
+        // Update UI after API check completes
+        updateUIForCurrentMode();
+
+        // If API is available, make sure model cards are properly enabled
+        if (apiIsAvailable) {
+          enableModelCards();
+        }
+      }
+    }
+
+    // Add a helper function to update UI based on current mode and API status
+    function updateUIForCurrentMode() {
       // Enable/disable controls based on mode
       const controlsDisabled = isOfflineMode || !apiAvailable;
       promptInput.disabled = controlsDisabled;
@@ -261,6 +276,18 @@
       });
 
       updateProgressUI(null);
+    }
+
+    // Add a function to specifically enable model cards
+    function enableModelCards() {
+      if (!isOfflineMode && apiAvailable) {
+        document.querySelectorAll('.model-card').forEach(card => {
+          if (card.dataset.model !== 'offline_mode') {
+            card.classList.remove('disabled');
+          }
+        });
+        console.log('Model cards enabled for online mode');
+      }
     }
 
     // WebSocket Setup
@@ -945,8 +972,16 @@
 
       offlineModeButton.addEventListener('click', toggleOfflineMode);
 
-      connectButton.addEventListener('click', () => {
-        checkApiAvailability();
+      connectButton.addEventListener('click', async () => {
+        const result = await checkApiAvailability();
+        if (result && isOfflineMode) {
+          // If API is available but we're in offline mode, prompt user to switch
+          showToast(
+            'info',
+            'API Available',
+            'API is available. Click "Try API Mode" to switch and enable model selection.'
+          );
+        }
       });
 
       apiUrlInput.addEventListener('keydown', (e) => {
