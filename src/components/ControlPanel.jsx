@@ -69,7 +69,7 @@ const ControlPanel = ({
             <SelectContent>
               {cameraDevices.map(device => (
                 <SelectItem key={device.deviceId} value={device.deviceId}>
-                  {device.label || `Camera ${device.deviceId}`}
+                  {device.label || `Camera ${device.deviceId.slice(0, 8)}...`}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -79,12 +79,16 @@ const ControlPanel = ({
         <div>
           <Label>Connection</Label>
           <div className="flex gap-2 items-center">
+            <div className="flex items-center">
+              <span className="text-sm mr-2">API URL</span>
+            </div>
             <Input 
               id="apiUrlInput"
               placeholder="API URL" 
               value={apiUrl} 
               onChange={e => onApiUrlChange(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && onConnect()}
+              className="flex-1"
             />
             <Button onClick={onConnect} variant="outline" className="whitespace-nowrap">
               Connect
@@ -92,7 +96,7 @@ const ControlPanel = ({
             <div className="flex items-center ml-2">
               <div className={`w-2.5 h-2.5 rounded-full mr-1.5 ${
                 connectionStatus === 'connected' ? 'bg-green-600' : 
-                connectionStatus === 'connecting' ? 'bg-yellow-500 animate-blink' : 
+                connectionStatus === 'connecting' ? 'bg-yellow-500 animate-pulse' : 
                 'bg-red-600'
               }`}></div>
               <span className="text-xs">
@@ -124,6 +128,7 @@ const ControlPanel = ({
             onChange={e => onPromptChange(e.target.value)}
             disabled={isOfflineMode || !apiAvailable}
             placeholder="Enter a prompt describing the desired transformation"
+            className="flex-1"
           />
           <Button 
             onClick={onSuggestPrompts} 
@@ -141,9 +146,9 @@ const ControlPanel = ({
               <span 
                 key={index}
                 onClick={() => onSelectSuggestion(suggestion)}
-                className="inline-flex bg-gray-100 text-gray-800 text-xs rounded px-2 py-1 cursor-pointer hover:bg-gray-200"
+                className="inline-flex bg-gray-100 text-gray-800 text-xs rounded px-2 py-1 cursor-pointer hover:bg-gray-200 transition-colors"
               >
-                {suggestion.length > 30 ? suggestion.substring(0, 30) + '...' : suggestion}
+                {suggestion.length > 50 ? suggestion.substring(0, 50) + '...' : suggestion}
               </span>
             ))}
           </div>
@@ -164,7 +169,7 @@ const ControlPanel = ({
         <div>
           <div className="flex justify-between items-center">
             <Label htmlFor="stepsSlider">Steps</Label>
-            <span className="text-sm font-medium">{steps}</span>
+            <span className="text-sm font-medium w-10 text-right">{steps}</span>
           </div>
           <Slider
             id="stepsSlider"
@@ -181,12 +186,12 @@ const ControlPanel = ({
         <div>
           <div className="flex justify-between items-center">
             <Label htmlFor="guidanceSlider">Guidance</Label>
-            <span className="text-sm font-medium">{guidanceScale}</span>
+            <span className="text-sm font-medium w-10 text-right">{guidanceScale}</span>
           </div>
           <Slider
             id="guidanceSlider"
             min={1}
-            max={15}
+            max={20}
             step={0.5}
             value={[guidanceScale]}
             onValueChange={value => onGuidanceChange(value[0])}
@@ -198,7 +203,7 @@ const ControlPanel = ({
         <div>
           <div className="flex justify-between items-center">
             <Label htmlFor="strengthSlider">Strength</Label>
-            <span className="text-sm font-medium">{strength}</span>
+            <span className="text-sm font-medium w-10 text-right">{strength}</span>
           </div>
           <Slider
             id="strengthSlider"
@@ -218,6 +223,7 @@ const ControlPanel = ({
         <Button 
           onClick={onToggleRunning}
           variant={isRunning ? "danger" : "success"}
+          className="w-full"
         >
           {isRunning ? 'Stop' : 'Start'}
         </Button>
@@ -226,22 +232,24 @@ const ControlPanel = ({
           onClick={onCaptureOnce} 
           variant="outline"
           disabled={isRunning}
+          className="w-full"
         >
           Capture Once
         </Button>
         
         <Button 
           onClick={onToggleOfflineMode} 
-          variant={isOfflineMode ? "outline" : "outline"}
-          className={isOfflineMode ? "border-blue-500 text-blue-600" : ""}
+          variant="outline"
+          className={`w-full ${isOfflineMode ? "border-blue-500 text-blue-600" : ""}`}
         >
           {isOfflineMode ? 'Try API Mode' : 'Use Offline Mode'}
         </Button>
         
-        <div>
+        <div className="flex items-center gap-2">
+          <span className="text-sm whitespace-nowrap">Request Interval</span>
           <Select value={requestInterval.toString()} onValueChange={value => onIntervalChange(parseInt(value))}>
             <SelectTrigger>
-              <SelectValue placeholder="Request Interval" />
+              <SelectValue placeholder="Interval" />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="1000">1 sec</SelectItem>
@@ -256,7 +264,7 @@ const ControlPanel = ({
       
       {/* Server Info */}
       {serverInfo && (
-        <div className="mt-3 text-xs text-gray-500">
+        <div className="mt-3 text-xs text-gray-500 border-t pt-3">
           {serverInfo}
         </div>
       )}

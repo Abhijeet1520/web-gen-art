@@ -3,7 +3,7 @@ import FeedContainer from './components/FeedContainer';
 import ControlPanel from './components/ControlPanel';
 import ToastContainer from './components/ToastContainer';
 
-// Texture prompts for suggestions
+// Texture prompts for suggestions (exactly matching HTML)
 const TEXTURE_PROMPTS = [
   "transform this space into a medieval stone castle with torch-lit walls, wooden beams, and weathered stone textures, highly detailed",
   "convert this scene to a tropical jungle environment with lush vegetation overtaking existing structures, vines climbing walls, moss on surfaces",
@@ -18,7 +18,7 @@ const TEXTURE_PROMPTS = [
 ];
 
 function App() {
-  // App state
+  // App state - matching HTML exactly
   const [isRunning, setIsRunning] = useState(false);
   const [isOfflineMode, setIsOfflineMode] = useState(true);
   const [apiAvailable, setApiAvailable] = useState(false);
@@ -29,15 +29,16 @@ function App() {
   const [models, setModels] = useState(['offline_mode']);
   const [selectedModel, setSelectedModel] = useState('offline_mode');
   const [apiUrl, setApiUrl] = useState('http://localhost:8000');
-  const [prompt, setPrompt] = useState('medieval stone castle with torch-lit walls and wooden beams, highly detailed');
+  // Updated default values to match HTML exactly
+  const [prompt, setPrompt] = useState('transform this space into a medieval stone castle with torch-lit walls, wooden beams, and weathered stone textures, highly detailed');
   const [negativePrompt, setNegativePrompt] = useState('blurry, watermark, text, low quality');
   const [steps, setSteps] = useState(30);
-  const [guidanceScale, setGuidanceScale] = useState(7.5);
-  const [strength, setStrength] = useState(0.7);
+  const [guidanceScale, setGuidanceScale] = useState(15); // Changed from 7.5 to 15 to match HTML
+  const [strength, setStrength] = useState(0.4); // Changed from 0.7 to 0.4 to match HTML
   const [requestInterval, setRequestInterval] = useState(1500);
   const [isGenerating, setIsGenerating] = useState(false);
   const [progressInfo, setProgressInfo] = useState(null);
-  const [serverInfo, setServerInfo] = useState('');
+  const [serverInfo, setServerInfo] = useState('Server information will appear here when connected...');
   const [promptSuggestions, setPromptSuggestions] = useState([]);
   const [toasts, setToasts] = useState([]);
   
@@ -46,6 +47,7 @@ function App() {
   const canvasRef = useRef(document.createElement('canvas'));
   const cameraStreamRef = useRef(null);
   const processingIntervalRef = useRef(null);
+  const apiCheckIntervalRef = useRef(null);
   const websocketRef = useRef(null);
   const websocketReconnectTimerRef = useRef(null);
   const lastRequestTimeRef = useRef(0);
@@ -53,10 +55,18 @@ function App() {
   // Toast notification system
   const showToast = useCallback((type, title, message) => {
     const id = Date.now();
-    setToasts(prevToasts => [
-      ...prevToasts, 
-      { id, type, title, message }
-    ]);
+    const newToast = { id, type, title, message };
+    
+    setToasts(prevToasts => {
+      const updatedToasts = [newToast, ...prevToasts];
+      // Limit maximum number of toasts to prevent overflow
+      return updatedToasts.slice(0, 5);
+    });
+    
+    // Auto remove after 5 seconds
+    setTimeout(() => {
+      setToasts(prevToasts => prevToasts.filter(toast => toast.id !== id));
+    }, 5000);
     
     return id;
   }, []);
@@ -64,6 +74,17 @@ function App() {
   const removeToast = useCallback((id) => {
     setToasts(prevToasts => prevToasts.filter(toast => toast.id !== id));
   }, []);
+  
+  // Update API status
+  const updateApiStatus = useCallback((status) => {
+    setApiAvailable(status);
+    
+    if (status) {
+      showToast('success', 'API Connection', 'Successfully connected to the server API');
+    } else if (!isOfflineMode) {
+      showToast('error', 'API Connection', 'Failed to connect to the server API. Using offline mode.');
+    }
+  }, [isOfflineMode, showToast]);
   
   // Setup WebSocket connection
   const setupWebSocket = useCallback(() => {
@@ -105,23 +126,23 @@ function App() {
             console.log('Server status:', data);
             
             // Update server info
-            let infoHtml = `Server Status: Connected`;
+            let infoText = `Server Status: Connected`;
             
             if (data.models && data.models.length) {
-              infoHtml += ` • Models: ${data.models.length} available`;
-              setModels(data.models);
+              infoText += ` • Models: ${data.models.length} available`;
+              setModels([...data.models, 'offline_mode']);
             }
             
             if (data.cuda_available) {
-              infoHtml += ` • GPU: ${data.cuda_device || 'Available'}`;
+              infoText += ` • GPU: ${data.cuda_device || 'Available'}`;
               if (data.cuda_memory_gb) {
-                infoHtml += ` (${data.cuda_memory_gb} GB)`;
+                infoText += ` (${data.cuda_memory_gb} GB)`;
               }
             } else {
-              infoHtml += ` • GPU: Not available - using CPU`;
+              infoText += ` • GPU: Not available - using CPU`;
             }
             
-            setServerInfo(infoHtml);
+            setServerInfo(infoText);
           } else if (data.type === 'error') {
             console.error('Server error:', data.message);
             showToast('error', 'Server Error', data.message);
@@ -166,7 +187,7 @@ function App() {
   // Check API availability
   const checkApiAvailability = useCallback(async () => {
     // First try the websocket connection
-    const wsConnected = setupWebSocket();
+    setupWebSocket();
     
     // Then check the REST API
     try {
@@ -177,26 +198,26 @@ function App() {
       
       if (response.ok) {
         const data = await response.json();
-        setApiAvailable(true);
+        updateApiStatus(true);
         
         // Update server info
-        let infoHtml = `Server Status: Connected`;
+        let infoText = `Server Status: Connected`;
         
         if (data.models && data.models.length) {
-          infoHtml += ` • Models: ${data.models.length} available`;
-          setModels(data.models);
+          infoText += ` • Models: ${data.models.length} available`;
+          setModels([...data.models, 'offline_mode']);
         }
         
         if (data.cuda_available) {
-          infoHtml += ` • GPU: ${data.cuda_device || 'Available'}`;
+          infoText += ` • GPU: ${data.cuda_device || 'Available'}`;
           if (data.cuda_memory_gb) {
-            infoHtml += ` (${data.cuda_memory_gb.toFixed(1)} GB)`;
+            infoText += ` (${data.cuda_memory_gb.toFixed(1)} GB)`;
           }
         } else {
-          infoHtml += ` • GPU: Not available - using CPU`;
+          infoText += ` • GPU: Not available - using CPU`;
         }
         
-        setServerInfo(infoHtml);
+        setServerInfo(infoText);
         
         return true;
       } else {
@@ -204,7 +225,7 @@ function App() {
       }
     } catch (error) {
       console.error('API check failed:', error);
-      setApiAvailable(false);
+      updateApiStatus(false);
       
       // Load default offline model option
       setModels(['offline_mode']);
@@ -214,7 +235,7 @@ function App() {
       
       return false;
     }
-  }, [apiUrl, setupWebSocket]);
+  }, [apiUrl, setupWebSocket, updateApiStatus]);
   
   // Toggle offline mode
   const toggleOfflineMode = useCallback(() => {
@@ -228,6 +249,9 @@ function App() {
       checkApiAvailability();
       showToast('info', 'Mode Changed', 'Trying to connect to API server...');
     }
+    
+    // Reset progress UI
+    setProgressInfo(null);
   }, [isOfflineMode, checkApiAvailability, showToast]);
   
   // Setup camera devices
@@ -241,6 +265,8 @@ function App() {
       if (videoDevices.length > 0 && !selectedCamera) {
         setSelectedCamera(videoDevices[0].deviceId);
         startCamera(videoDevices[0].deviceId);
+      } else if (videoDevices.length === 0) {
+        showToast('error', 'Camera Error', 'No cameras found on your device');
       }
     } catch (error) {
       console.error('Error accessing cameras:', error);
@@ -261,7 +287,9 @@ function App() {
       };
       
       cameraStreamRef.current = await navigator.mediaDevices.getUserMedia(constraints);
-      videoRef.current.srcObject = cameraStreamRef.current;
+      if (videoRef.current) {
+        videoRef.current.srcObject = cameraStreamRef.current;
+      }
       showToast('success', 'Camera', 'Camera started successfully');
     } catch (error) {
       console.error('Error starting camera:', error);
@@ -333,18 +361,19 @@ function App() {
       
       // If we got here, API is available
       if (!apiAvailable) {
-        setApiAvailable(true);
+        updateApiStatus(true);
       }
     } catch (error) {
       console.error('Error processing image:', error);
       setGeneratedImage(imageDataUrl); // Fallback to showing camera feed
       showToast('error', 'Generation Error', error.message);
-      setApiAvailable(false);
+      updateApiStatus(false);
     }
   }, [
     isRunning, captureImage, isGenerating, requestInterval, 
     isOfflineMode, apiAvailable, selectedModel, apiUrl,
-    prompt, negativePrompt, steps, guidanceScale, strength, showToast
+    prompt, negativePrompt, steps, guidanceScale, strength, 
+    showToast, updateApiStatus
   ]);
   
   // Process a single frame once
@@ -408,13 +437,13 @@ function App() {
       
       // If we got here, API is available
       if (!apiAvailable) {
-        setApiAvailable(true);
+        updateApiStatus(true);
       }
     } catch (error) {
       console.error('Error processing image:', error);
       setGeneratedImage(imageDataUrl); // Fallback to showing camera feed
       showToast('error', 'Generation Error', error.message);
-      setApiAvailable(false);
+      updateApiStatus(false);
     } finally {
       // Reset the generating flag
       setIsGenerating(false);
@@ -427,7 +456,7 @@ function App() {
   }, [
     isRunning, captureImage, isOfflineMode, apiAvailable, 
     selectedModel, prompt, negativePrompt, steps, 
-    guidanceScale, strength, apiUrl, showToast
+    guidanceScale, strength, apiUrl, showToast, updateApiStatus
   ]);
   
   // Get prompt suggestions
@@ -454,11 +483,11 @@ function App() {
       setPromptSuggestions(data.suggestions);
     } catch (error) {
       console.error('Error getting suggestions:', error);
-      setApiAvailable(false);
+      updateApiStatus(false);
       setPromptSuggestions(TEXTURE_PROMPTS.slice(0, 5));
       showToast('warning', 'Suggestions', 'Failed to get suggestions from server. Using default suggestions.');
     }
-  }, [isOfflineMode, apiAvailable, prompt, apiUrl, showToast]);
+  }, [isOfflineMode, apiAvailable, prompt, apiUrl, showToast, updateApiStatus]);
   
   // Toggle continuous processing
   const toggleProcessing = useCallback(() => {
@@ -469,22 +498,31 @@ function App() {
       // Start processing frames
       processFrame(); // Process one frame immediately
       processingIntervalRef.current = setInterval(processFrame, 100); // Use a fast interval for checking, but throttle actual requests
+      
+      // If in API mode, periodically check if API becomes available
+      if (!isOfflineMode && !apiAvailable && !apiCheckIntervalRef.current) {
+        apiCheckIntervalRef.current = setInterval(checkApiAvailability, 10000);
+      }
+      
       showToast('success', 'Processing', 'Started camera processing');
     } else {
       // Stop processing
       clearInterval(processingIntervalRef.current);
+      clearInterval(apiCheckIntervalRef.current);
       processingIntervalRef.current = null;
+      apiCheckIntervalRef.current = null;
       
       // Hide progress
       setProgressInfo(null);
       
       showToast('info', 'Processing', 'Stopped camera processing');
     }
-  }, [isRunning, processFrame, showToast]);
+  }, [isRunning, processFrame, isOfflineMode, apiAvailable, checkApiAvailability, showToast]);
   
   // Initialize on component mount
   useEffect(() => {
     setupCameras();
+    toggleOfflineMode(); // Set initial UI state
     checkApiAvailability();
     
     // Clean up on unmount
@@ -498,9 +536,10 @@ function App() {
       }
       
       clearInterval(processingIntervalRef.current);
+      clearInterval(apiCheckIntervalRef.current);
       clearTimeout(websocketReconnectTimerRef.current);
     };
-  }, [setupCameras, checkApiAvailability]);
+  }, [setupCameras, toggleOfflineMode, checkApiAvailability]);
   
   // Ping the websocket to keep it alive
   useEffect(() => {

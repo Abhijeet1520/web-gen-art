@@ -20,16 +20,21 @@ const ModelSelection = ({ models, selectedModel, onSelectModel, isOfflineMode, a
     return { name: model, description: 'Model' };
   };
 
-  // If no models are provided, create a default offline model
+  // Ensure we always have at least offline mode
   const displayModels = models && models.length > 0 
     ? models 
     : ['offline_mode'];
+
+  // If models don't include offline_mode, add it
+  const allModels = displayModels.includes('offline_mode') 
+    ? displayModels 
+    : [...displayModels, 'offline_mode'];
 
   return (
     <div className="mb-4">
       <label className="block text-sm font-medium mb-2">Model</label>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-2">
-        {displayModels.map(model => {
+        {allModels.map(model => {
           const { name, description } = getDisplayInfo(model);
           const isDisabled = (isOfflineMode || !apiAvailable) && model !== 'offline_mode';
           const isSelected = model === selectedModel;
@@ -37,14 +42,22 @@ const ModelSelection = ({ models, selectedModel, onSelectModel, isOfflineMode, a
           return (
             <div 
               key={model}
-              onClick={() => !isDisabled && onSelectModel(model)}
+              onClick={() => {
+                if (!isDisabled) {
+                  onSelectModel(model);
+                  // If selecting offline mode, we should handle the mode switch
+                  if (model === 'offline_mode' && !isOfflineMode) {
+                    // This will be handled by the parent component
+                  }
+                }
+              }}
               className={`
                 border rounded-md p-3 cursor-pointer transition-all duration-200
                 ${isDisabled ? 'opacity-60 cursor-not-allowed' : 'hover:border-blue-500 hover:bg-gray-50'}
                 ${isSelected ? 'border-green-600 bg-green-50' : 'border-gray-200'}
               `}
             >
-              <h6 className="font-medium mb-1">{name}</h6>
+              <h6 className="font-medium mb-1 text-sm">{name}</h6>
               <div className="text-xs text-gray-500">{description}</div>
             </div>
           );
