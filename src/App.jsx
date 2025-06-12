@@ -3,6 +3,9 @@ import FeedContainer from './components/FeedContainer';
 import ControlPanel from './components/ControlPanel';
 import ToastContainer from './components/ToastContainer';
 
+// NGROK header for bypassing browser warnings
+const NGROK_HEADER = { 'ngrok-skip-browser-warning': '69420' };
+
 // Texture prompts for suggestions (exactly matching HTML)
 const TEXTURE_PROMPTS = [
   "transform this space into a medieval stone castle with torch-lit walls, wooden beams, and weathered stone textures, highly detailed",
@@ -33,8 +36,8 @@ function App() {
   const [prompt, setPrompt] = useState('transform this space into a medieval stone castle with torch-lit walls, wooden beams, and weathered stone textures, highly detailed');
   const [negativePrompt, setNegativePrompt] = useState('blurry, watermark, text, low quality');
   const [steps, setSteps] = useState(30);
-  const [guidanceScale, setGuidanceScale] = useState(15); // Changed from 7.5 to 15 to match HTML
-  const [strength, setStrength] = useState(0.4); // Changed from 0.7 to 0.4 to match HTML
+  const [guidanceScale, setGuidanceScale] = useState(15); // Matching HTML
+  const [strength, setStrength] = useState(0.4); // Matching HTML
   const [requestInterval, setRequestInterval] = useState(1500);
   const [isGenerating, setIsGenerating] = useState(false);
   const [progressInfo, setProgressInfo] = useState(null);
@@ -51,6 +54,7 @@ function App() {
   const websocketRef = useRef(null);
   const websocketReconnectTimerRef = useRef(null);
   const lastRequestTimeRef = useRef(0);
+  const lastApiCheckTimeRef = useRef(0);
   
   // Toast notification system
   const showToast = useCallback((type, title, message) => {
@@ -75,18 +79,25 @@ function App() {
     setToasts(prevToasts => prevToasts.filter(toast => toast.id !== id));
   }, []);
   
-  // Update API status
-  const updateApiStatus = useCallback((status) => {
+  // Update API status with better error suppression
+  const updateApiStatus = useCallback((status, suppressToast = false) => {
     setApiAvailable(status);
     
-    if (status) {
-      showToast('success', 'API Connection', 'Successfully connected to the server API');
-    } else if (!isOfflineMode) {
-      showToast('error', 'API Connection', 'Failed to connect to the server API. Using offline mode.');
+    if (!suppressToast && !isOfflineMode) {
+      if (status) {
+        showToast('success', 'API Connection', 'Successfully connected to the server API');
+      } else {
+        // Only show error if we haven't shown one recently (avoid spam)
+        const now = Date.now();
+        if (now - lastApiCheckTimeRef.current > 30000) { // 30 seconds cooldown
+          showToast('error', 'API Connection', 'Failed to connect to the server API. Using offline mode.');
+          lastApiCheckTimeRef.current = now;
+        }
+      }
     }
   }, [isOfflineMode, showToast]);
   
-  // Setup WebSocket connection
+  // Setup WebSocket connection with better error handling
   const setupWebSocket = useCallback(() => {
     if (websocketRef.current) {
       websocketRef.current.close();
@@ -159,33 +170,33 @@ function App() {
         console.log('WebSocket closed');
         setConnectionStatus('disconnected');
         
-        // Try to reconnect after a delay
+        // Try to reconnect after a delay only if not in offline mode
         clearTimeout(websocketReconnectTimerRef.current);
-        websocketReconnectTimerRef.current = setTimeout(() => {
-          if (!isOfflineMode) {
+        if (!isOfflineMode) {
+          websocketReconnectTimerRef.current = setTimeout(() => {
             setConnectionStatus('connecting');
             setupWebSocket();
-          }
-        }, 5000);
+          }, 5000);
+        }
       };
       
       websocketRef.current.onerror = (error) => {
         console.error('WebSocket error:', error);
         setConnectionStatus('disconnected');
-        showToast('error', 'WebSocket Error', 'Failed to connect to server websocket');
+        // Don't show toast for WebSocket errors when server is likely down
+        // Only log to console
       };
       
       return true;
     } catch (error) {
       console.error('Failed to create WebSocket:', error);
       setConnectionStatus('disconnected');
-      showToast('error', 'WebSocket Error', 'Failed to create websocket connection');
       return false;
     }
   }, [apiUrl, isOfflineMode, showToast]);
   
-  // Check API availability
-  const checkApiAvailability = useCallback(async () => {
+  // Check API availability with better error handling
+  const checkApiAvailability = useCallback(async (suppressToast = false) => {
     // First try the websocket connection
     setupWebSocket();
     
@@ -193,12 +204,15 @@ function App() {
     try {
       const response = await fetch(`${apiUrl}/status`, {
         method: 'GET',
-        headers: { 'Accept': 'application/json' }
+        headers: { 
+          'Accept': 'application/json',
+          ...NGROK_HEADER
+        }
       });
       
       if (response.ok) {
         const data = await response.json();
-        updateApiStatus(true);
+        updateApiStatus(true, suppressToast);
         
         // Update server info
         let infoText = `Server Status: Connected`;
@@ -225,7 +239,7 @@ function App() {
       }
     } catch (error) {
       console.error('API check failed:', error);
-      updateApiStatus(false);
+      updateApiStatus(false, suppressToast);
       
       // Load default offline model option
       setModels(['offline_mode']);
@@ -245,6 +259,12 @@ function App() {
     if (newOfflineMode) {
       showToast('info', 'Mode Changed', 'Switched to offline mode. Camera feed will be displayed without processing.');
       setSelectedModel('offline_mode');
+      // Close WebSocket when going offline
+      if (websocketRef.current) {
+        websocketRef.current.close();
+        websocketRef.current = null;
+      }
+      setConnectionStatus('disconnected');
     } else {
       checkApiAvailability();
       showToast('info', 'Mode Changed', 'Trying to connect to API server...');
@@ -337,7 +357,10 @@ function App() {
       
       const response = await fetch(`${apiUrl}/generate`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          ...NGROK_HEADER
+        },
         body: JSON.stringify({
           model: selectedModel,
           prompt: prompt,
@@ -361,13 +384,18 @@ function App() {
       
       // If we got here, API is available
       if (!apiAvailable) {
-        updateApiStatus(true);
+        updateApiStatus(true, true); // Suppress toast to avoid spam
       }
     } catch (error) {
       console.error('Error processing image:', error);
       setGeneratedImage(imageDataUrl); // Fallback to showing camera feed
-      showToast('error', 'Generation Error', error.message);
-      updateApiStatus(false);
+      // Only show error toast if this is the first error in a while
+      const now = Date.now();
+      if (now - lastApiCheckTimeRef.current > 30000) {
+        showToast('error', 'Generation Error', 'Failed to process image');
+        lastApiCheckTimeRef.current = now;
+      }
+      updateApiStatus(false, true); // Suppress toast to avoid spam
     }
   }, [
     isRunning, captureImage, isGenerating, requestInterval, 
@@ -412,7 +440,10 @@ function App() {
       
       const response = await fetch(`${apiUrl}/generate`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          ...NGROK_HEADER
+        },
         body: JSON.stringify({
           model: selectedModel,
           prompt: prompt,
@@ -469,7 +500,10 @@ function App() {
     try {
       const response = await fetch(`${apiUrl}/suggest`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          ...NGROK_HEADER
+        },
         body: JSON.stringify({
           partial_prompt: prompt
         })
@@ -483,7 +517,7 @@ function App() {
       setPromptSuggestions(data.suggestions);
     } catch (error) {
       console.error('Error getting suggestions:', error);
-      updateApiStatus(false);
+      updateApiStatus(false, true); // Suppress toast
       setPromptSuggestions(TEXTURE_PROMPTS.slice(0, 5));
       showToast('warning', 'Suggestions', 'Failed to get suggestions from server. Using default suggestions.');
     }
@@ -499,9 +533,9 @@ function App() {
       processFrame(); // Process one frame immediately
       processingIntervalRef.current = setInterval(processFrame, 100); // Use a fast interval for checking, but throttle actual requests
       
-      // If in API mode, periodically check if API becomes available
+      // If in API mode, periodically check if API becomes available (suppress toasts to avoid spam)
       if (!isOfflineMode && !apiAvailable && !apiCheckIntervalRef.current) {
-        apiCheckIntervalRef.current = setInterval(checkApiAvailability, 10000);
+        apiCheckIntervalRef.current = setInterval(() => checkApiAvailability(true), 10000);
       }
       
       showToast('success', 'Processing', 'Started camera processing');
@@ -523,7 +557,7 @@ function App() {
   useEffect(() => {
     setupCameras();
     toggleOfflineMode(); // Set initial UI state
-    checkApiAvailability();
+    checkApiAvailability(true); // Suppress initial connection toast
     
     // Clean up on unmount
     return () => {
@@ -584,7 +618,7 @@ function App() {
         // Connection controls
         apiUrl={apiUrl}
         onApiUrlChange={setApiUrl}
-        onConnect={checkApiAvailability}
+        onConnect={() => checkApiAvailability()}
         connectionStatus={connectionStatus}
         
         // Model selection
