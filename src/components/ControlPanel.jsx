@@ -60,6 +60,14 @@ const ControlPanel = ({
   // Controls are enabled when: NOT in offline mode AND API is available
   const controlsDisabled = isOfflineMode || !apiAvailable;
   
+  console.log('ControlPanel render:', { 
+    models, 
+    selectedModel, 
+    isOfflineMode, 
+    apiAvailable, 
+    controlsDisabled 
+  });
+  
   return (
     <div className="bg-white rounded-lg p-5 shadow-md mb-5">
       {/* Camera and Connection Row */}
@@ -230,7 +238,7 @@ const ControlPanel = ({
           onClick={onToggleRunning}
           variant={isRunning ? "danger" : "success"}
           className="w-full"
-          disabled={controlsDisabled && selectedModel !== 'offline_mode'}
+          // Start/Stop button works in offline mode for camera feed, and when API is available for processing
         >
           {isRunning ? 'Stop' : 'Start'}
         </Button>
@@ -238,7 +246,7 @@ const ControlPanel = ({
         <Button 
           onClick={onCaptureOnce} 
           variant="outline"
-          disabled={isRunning || (controlsDisabled && selectedModel !== 'offline_mode')}
+          disabled={isRunning}
           className="w-full"
         >
           Capture Once

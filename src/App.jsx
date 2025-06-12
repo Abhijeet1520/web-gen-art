@@ -142,7 +142,12 @@ function App() {
             
             if (data.models && data.models.length) {
               infoText += ` • Models: ${data.models.length} available`;
-              setModels([...data.models, 'offline_mode']);
+              // Update models state with available models + offline mode
+              const allModels = [...data.models];
+              if (!allModels.includes('offline_mode')) {
+                allModels.push('offline_mode');
+              }
+              setModels(allModels);
             }
             
             if (data.cuda_available) {
@@ -220,7 +225,14 @@ function App() {
         
         if (data.models && data.models.length) {
           infoText += ` • Models: ${data.models.length} available`;
-          setModels([...data.models, 'offline_mode']);
+          // IMPORTANT: Update models state when API connection is successful
+          const availableModels = Array.isArray(data.models) ? data.models : [];
+          const allModels = [...availableModels];
+          if (!allModels.includes('offline_mode')) {
+            allModels.push('offline_mode');
+          }
+          setModels(allModels);
+          console.log('Models loaded:', allModels);
         }
         
         if (data.cuda_available) {
@@ -242,7 +254,7 @@ function App() {
       console.error('API check failed:', error);
       updateApiStatus(false, suppressToast);
       
-      // Load default offline model option
+      // Load default offline model option when API is not available
       setModels(['offline_mode']);
       
       // Update server info
@@ -266,6 +278,8 @@ function App() {
         websocketRef.current = null;
       }
       setConnectionStatus('disconnected');
+      // Reset to offline mode only
+      setModels(['offline_mode']);
     } else {
       checkApiAvailability();
       showToast('info', 'Mode Changed', 'Trying to connect to API server...');

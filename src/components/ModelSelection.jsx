@@ -30,14 +30,16 @@ const ModelSelection = ({ models, selectedModel, onSelectModel, isOfflineMode, a
     ? displayModels 
     : [...displayModels, 'offline_mode'];
 
+  console.log('ModelSelection render:', { allModels, selectedModel, isOfflineMode, apiAvailable });
+
   return (
     <div className="mb-4">
       <label className="block text-sm font-medium mb-2">Model</label>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-2">
         {allModels.map(model => {
           const { name, description } = getDisplayInfo(model);
-          // Models are disabled when: offline mode is ON AND it's not the offline model, OR API is not available AND it's not the offline model
-          const isDisabled = (isOfflineMode && model !== 'offline_mode') || (!apiAvailable && model !== 'offline_mode');
+          // Simple logic: if offline mode is on OR API is not available, disable all models except offline_mode
+          const isDisabled = (isOfflineMode || !apiAvailable) && model !== 'offline_mode';
           const isSelected = model === selectedModel;
           
           return (
@@ -46,6 +48,7 @@ const ModelSelection = ({ models, selectedModel, onSelectModel, isOfflineMode, a
               onClick={() => {
                 if (!isDisabled) {
                   onSelectModel(model);
+                  console.log('Model selected:', model);
                   // If selecting offline mode, we should handle the mode switch
                   if (model === 'offline_mode' && !isOfflineMode) {
                     // This will be handled by the parent component
