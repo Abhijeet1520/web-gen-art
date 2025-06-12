@@ -36,7 +36,8 @@ const ModelSelection = ({ models, selectedModel, onSelectModel, isOfflineMode, a
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-2">
         {allModels.map(model => {
           const { name, description } = getDisplayInfo(model);
-          const isDisabled = (isOfflineMode || !apiAvailable) && model !== 'offline_mode';
+          // Models are disabled when: offline mode is ON AND it's not the offline model, OR API is not available AND it's not the offline model
+          const isDisabled = (isOfflineMode && model !== 'offline_mode') || (!apiAvailable && model !== 'offline_mode');
           const isSelected = model === selectedModel;
           
           return (

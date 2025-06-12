@@ -56,6 +56,10 @@ const ControlPanel = ({
   // Server info
   serverInfo
 }) => {
+  // Calculate if controls should be disabled
+  // Controls are enabled when: NOT in offline mode AND API is available
+  const controlsDisabled = isOfflineMode || !apiAvailable;
+  
   return (
     <div className="bg-white rounded-lg p-5 shadow-md mb-5">
       {/* Camera and Connection Row */}
@@ -126,14 +130,14 @@ const ControlPanel = ({
             id="promptInput"
             value={prompt} 
             onChange={e => onPromptChange(e.target.value)}
-            disabled={isOfflineMode || !apiAvailable}
+            disabled={controlsDisabled}
             placeholder="Enter a prompt describing the desired transformation"
             className="flex-1"
           />
           <Button 
             onClick={onSuggestPrompts} 
             variant="outline"
-            disabled={isOfflineMode || !apiAvailable}
+            disabled={controlsDisabled}
           >
             Suggest
           </Button>
@@ -145,8 +149,10 @@ const ControlPanel = ({
             {promptSuggestions.map((suggestion, index) => (
               <span 
                 key={index}
-                onClick={() => onSelectSuggestion(suggestion)}
-                className="inline-flex bg-gray-100 text-gray-800 text-xs rounded px-2 py-1 cursor-pointer hover:bg-gray-200 transition-colors"
+                onClick={() => !controlsDisabled && onSelectSuggestion(suggestion)}
+                className={`inline-flex bg-gray-100 text-gray-800 text-xs rounded px-2 py-1 transition-colors ${
+                  controlsDisabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:bg-gray-200'
+                }`}
               >
                 {suggestion.length > 50 ? suggestion.substring(0, 50) + '...' : suggestion}
               </span>
@@ -159,7 +165,7 @@ const ControlPanel = ({
           id="negativePromptInput"
           value={negativePrompt} 
           onChange={e => onNegativePromptChange(e.target.value)}
-          disabled={isOfflineMode || !apiAvailable}
+          disabled={controlsDisabled}
           placeholder="Elements to avoid in the generated image"
         />
       </div>
@@ -178,7 +184,7 @@ const ControlPanel = ({
             step={1}
             value={[steps]}
             onValueChange={value => onStepsChange(value[0])}
-            disabled={isOfflineMode || !apiAvailable}
+            disabled={controlsDisabled}
             className="mt-2"
           />
         </div>
@@ -195,7 +201,7 @@ const ControlPanel = ({
             step={0.5}
             value={[guidanceScale]}
             onValueChange={value => onGuidanceChange(value[0])}
-            disabled={isOfflineMode || !apiAvailable}
+            disabled={controlsDisabled}
             className="mt-2"
           />
         </div>
@@ -212,7 +218,7 @@ const ControlPanel = ({
             step={0.05}
             value={[strength]}
             onValueChange={value => onStrengthChange(value[0])}
-            disabled={isOfflineMode || !apiAvailable}
+            disabled={controlsDisabled}
             className="mt-2"
           />
         </div>
@@ -224,6 +230,7 @@ const ControlPanel = ({
           onClick={onToggleRunning}
           variant={isRunning ? "danger" : "success"}
           className="w-full"
+          disabled={controlsDisabled && selectedModel !== 'offline_mode'}
         >
           {isRunning ? 'Stop' : 'Start'}
         </Button>
@@ -231,7 +238,7 @@ const ControlPanel = ({
         <Button 
           onClick={onCaptureOnce} 
           variant="outline"
-          disabled={isRunning}
+          disabled={isRunning || (controlsDisabled && selectedModel !== 'offline_mode')}
           className="w-full"
         >
           Capture Once

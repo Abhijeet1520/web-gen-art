@@ -54,7 +54,7 @@ function App() {
   const websocketRef = useRef(null);
   const websocketReconnectTimerRef = useRef(null);
   const lastRequestTimeRef = useRef(0);
-  const lastApiCheckTimeRef = useRef(0);
+  const lastApiErrorTimeRef = useRef(0);
   
   // Toast notification system
   const showToast = useCallback((type, title, message) => {
@@ -79,19 +79,20 @@ function App() {
     setToasts(prevToasts => prevToasts.filter(toast => toast.id !== id));
   }, []);
   
-  // Update API status with better error suppression
+  // Update API status and ensure UI controls are properly enabled/disabled
   const updateApiStatus = useCallback((status, suppressToast = false) => {
     setApiAvailable(status);
     
+    // Show toast notifications for connection status changes
     if (!suppressToast && !isOfflineMode) {
       if (status) {
         showToast('success', 'API Connection', 'Successfully connected to the server API');
       } else {
         // Only show error if we haven't shown one recently (avoid spam)
         const now = Date.now();
-        if (now - lastApiCheckTimeRef.current > 30000) { // 30 seconds cooldown
+        if (now - lastApiErrorTimeRef.current > 30000) { // 30 seconds cooldown
           showToast('error', 'API Connection', 'Failed to connect to the server API. Using offline mode.');
-          lastApiCheckTimeRef.current = now;
+          lastApiErrorTimeRef.current = now;
         }
       }
     }
@@ -251,7 +252,7 @@ function App() {
     }
   }, [apiUrl, setupWebSocket, updateApiStatus]);
   
-  // Toggle offline mode
+  // Toggle offline mode with proper control state management
   const toggleOfflineMode = useCallback(() => {
     const newOfflineMode = !isOfflineMode;
     setIsOfflineMode(newOfflineMode);
@@ -391,9 +392,9 @@ function App() {
       setGeneratedImage(imageDataUrl); // Fallback to showing camera feed
       // Only show error toast if this is the first error in a while
       const now = Date.now();
-      if (now - lastApiCheckTimeRef.current > 30000) {
+      if (now - lastApiErrorTimeRef.current > 30000) {
         showToast('error', 'Generation Error', 'Failed to process image');
-        lastApiCheckTimeRef.current = now;
+        lastApiErrorTimeRef.current = now;
       }
       updateApiStatus(false, true); // Suppress toast to avoid spam
     }
