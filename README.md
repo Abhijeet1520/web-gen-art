@@ -1,5 +1,7 @@
 # Stable Diffusion Texture Transformer
 
+[![Demo](./images/demo.png)](https://texture-transformer.netlify.app/)
+
 A real-time web application that transforms room textures and environments using Stable Diffusion image-to-image models. Take a photo of your surroundings and instantly transform them into different styles, themes, and textures.
 
 ## Features
@@ -41,8 +43,10 @@ A real-time web application that transforms room textures and environments using
 
 3. Run the server:
    ```bash
-   python sd_image2image_server_simple.py --auto-port
+   python sd_server_basic.py
    ```
+
+![Server Demo](./images/simple%20server%20run.png)
 
 4. Open `index.html` in your web browser
 
