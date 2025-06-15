@@ -165,16 +165,36 @@ class SuggestResponse(BaseModel):
 
 # Example prompts for texture transformations
 TEXTURE_PROMPTS = [
-    "transform this space into a medieval stone castle with torch-lit walls, wooden beams, and weathered stone textures, highly detailed",
-    "convert this scene to a tropical jungle environment with lush vegetation overtaking existing structures, vines climbing walls, moss on surfaces",
-    "change current environment to futuristic cyberpunk with neon-lit edges, holographic displays replacing existing frames, metallic surfaces",
-    "transform this into a winter wonderland with snow-covered surfaces, icicles hanging from edges, frosted windows, soft blue lighting",
-    "convert this area to an underwater scene with coral reefs growing on structures, seaweed replacing vertical elements, bubbles floating upward",
-    "change this setting to an ancient temple with moss-covered stone walls, hieroglyphics carved into surfaces, golden artifacts scattered about",
-    "transform current scene into a steampunk workshop with brass gears on walls, copper pipes replacing fixtures, vintage machinery integrated",
-    "convert this space to a fantasy crystal cave with glowing gems embedded in walls, crystalline formations replacing furniture, ethereal lighting",
-    "transform this into a post-apocalyptic abandoned version with plant overgrowth, peeling paint, structural decay, dust particles in light beams",
-    "change this environment to a luxury gold and marble palace with ornate decorations, gilded surfaces, polished marble floors, classical columns"
+    "transform into horror style, dark shadows, eerie lighting, abandoned atmosphere, create a haunting and unsettling environment with ominous tones",
+    "convert to medieval aesthetic, stone castle, torch-lit walls, wooden beams, transform into an ancient fortress with weathered textures and rustic elements",
+    "change to caveman style, primitive cave, stone age, tribal elements, turn into prehistoric scenery with natural pigments and crude markings",
+    "transform into cyberpunk world, neon lights, digital interfaces, high-tech city, convert to futuristic urban dystopia with glowing elements and holographic displays",
+    "remake as steampunk, brass gears, copper pipes, victorian style, change to alternate history with mechanical contraptions and ornate industrial designs",
+    "convert to fantasy realm, magical elements, enchanted forest, mystical creatures, transform into a world of wonder with ethereal lighting and supernatural features",
+    "change to sci-fi environment, futuristic technology, space station, alien world, remake with advanced technological elements and extraterrestrial landscapes",
+    "transform into underwater scene, bubbles, coral reefs, seaweed, aquatic life, convert to submerged world with refracted light and flowing organic forms",
+    "change to winter wonderland, snow-covered, icicles, frosted surfaces, soft blue lighting, create a frigid atmosphere with crystalline structures and muted palette",
+    "convert to tropical paradise, lush jungle, vibrant flowers, exotic wildlife, transform into verdant rainforest with saturated colors and dense vegetation",
+    "transform into desert landscape, sand dunes, cacti, heat waves, barren terrain, change to arid environment with sun-bleached textures and vast open spaces",
+    "remake as celestial space, stars, nebulae, cosmic clouds, space background, convert to astronomical vista with interstellar phenomena and cosmic radiation",
+    "change to industrial setting, factory interior, machinery, metal surfaces, transform into mechanized environment with utilitarian structures and raw materials",
+    "convert to retro 80s style, synthwave, neon pink and blue, arcade aesthetic, remake with nostalgic elements and bold geometric patterns from the 1980s era",
+    "transform into gothic architecture, ornate stonework, stained glass, gargoyles, change to medieval-inspired design with intricate details and dramatic verticality",
+    "change to anime style, cel-shaded, vibrant colors, exaggerated features, convert to Japanese animation aesthetic with distinctive line work and stylized proportions",
+    "transform into cartoon world, bold outlines, primary colors, simplified style, remake with exaggerated forms and playful, non-realistic elements",
+    "convert to watercolor painting, paint texture, soft edges, artistic rendering, change to hand-painted appearance with pigment variations and gentle color bleeding",
+    "transform into pixelated graphics, 8-bit style, retro game aesthetic, blocky textures, remake with deliberately limited resolution and nostalgic video game look",
+    "change to post-apocalyptic wasteland, ruins, overgrown vegetation, decay, transform into devastated landscape with abandoned structures reclaimed by nature",
+    "convert to vaporwave aesthetic, pastel colors, glitch effects, surreal elements, remake with internet-inspired nostalgia and deliberately artificial design",
+    "transform into film noir, black and white, high contrast, dramatic shadows, deep blacks, change to cinematic style with mysterious mood and stark lighting",
+    "change to minimalist design, clean lines, uncluttered space, monochromatic palette, convert to simplified elegant aesthetic with emphasis on negative space",
+    "transform into baroque style, ornate details, gold accents, dramatic lighting, complex patterns, remake with elaborate decorative elements and rich textures",
+    "convert to art deco, geometric patterns, luxury materials, symmetrical design, change to 1920s-inspired elegance with bold shapes and decorative opulence",
+    "change to grunge texture, weathered surfaces, urban decay, worn materials, peeling paint, transform into distressed appearance with layers of history",
+    "transform into surrealist dreamscape, impossible physics, strange combinations, floating elements, convert to subconscious-inspired imagery with unexpected juxtapositions",
+    "change to isometric perspective, 45-degree angle view, game-like geometry, consistent depth, remake with technical precision and uniform directional representation",
+    "convert to abstract composition, non-representational, shape-focused, color-field, transform into non-figurative arrangement with emphasis on form and color relationships",
+    "change to luxury environment, gold and marble, ornate decorations, classical elements, transform into opulent setting with premium materials and sophisticated details"
 ]
 
 # --- API Endpoints
@@ -240,10 +260,6 @@ async def generate(req: GenerateRequest):
             "message": f"Starting generation with model {req.model}"
         }))
 
-        # Validate model (for future extension)
-        if req.model != DEFAULT_MODEL:
-            raise HTTPException(400, f"Only model '{DEFAULT_MODEL}' is supported right now.")
-
         # Handle data URLs (they start with "data:")
         if req.image_b64.startswith("data:"):
             b64_data = req.image_b64.split(",")[1]
@@ -257,10 +273,8 @@ async def generate(req: GenerateRequest):
         except Exception as e:
             raise HTTPException(400, f"Could not decode input image: {str(e)}")
 
-        # Generate image - Match working code's parameters
         try:
-            # Use fixed seed for reproducible results (same as notebook)
-            generator = torch.Generator(device=device).manual_seed(1024)
+            generator = torch.Generator(device=device)
 
             # First try without callback to match notebook approach
             result = pipe(
