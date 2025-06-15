@@ -71,14 +71,8 @@ Try these prompts to transform your surroundings:
 The server can be configured with various command-line options:
 
 ```bash
-python sd_image2image_server.py --help
+python sd_server_basic.py
 ```
-
-Options include:
-- `--port`: Specify a custom port (default: 8000)
-- `--auto-port`: Automatically find an available port
-- `--host`: Bind to a specific interface (default: 0.0.0.0)
-- `--log-level`: Set logging verbosity
 
 ## Troubleshooting
 
@@ -88,4 +82,10 @@ Options include:
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+This code is licensed under a fully open-source [BSD-3-Clause license](./LICENSE).
+
+Model Usage & Licenses
+Many bundled models use the CreativeML OpenRAIL License. Please review it before use.
+
+## Citation
+If you find our repository useful, please consider giving it a star ⭐
