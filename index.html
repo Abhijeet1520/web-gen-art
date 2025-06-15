@@ -178,6 +178,8 @@
     const wsStatus = document.getElementById('wsStatus');
     const toastContainer = document.getElementById('toastContainer');
 
+    const NGROK_HEADER = { 'ngrok-skip-browser-warning': '69420' };
+
     // App State
     let isRunning = false;
     let isOfflineMode = true;
@@ -658,7 +660,10 @@
       try {
         const response = await fetch(`${apiUrlInput.value}/status`, {
           method: 'GET',
-          headers: { 'Accept': 'application/json' }
+          headers: {
+            'Content-Type': 'application/json',
+            ...NGROK_HEADER
+          }
         });
 
         if (response.ok) {
@@ -740,7 +745,10 @@
 
         const response = await fetch(`${apiUrlInput.value}/generate`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            ...NGROK_HEADER
+          },
           body: JSON.stringify({
             model: selectedModel,
             prompt: promptInput.value,
@@ -876,7 +884,10 @@
       try {
         const response = await fetch(`${apiUrlInput.value}/suggest`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            ...NGROK_HEADER
+          },
           body: JSON.stringify({
             partial_prompt: promptInput.value
           })
