@@ -1,6 +1,6 @@
 # Stable Diffusion Texture Transformer
 
-[![Demo](./images/demo.png)](https://texture-transformer.netlify.app/)
+[![Demo](./images/demo.png)](https://texture-transformer.abhi1520.com/)
 
 A real-time web application that transforms room textures and environments using Stable Diffusion image-to-image models. Take a photo of your surroundings and instantly transform them into different styles, themes, and textures.
 
