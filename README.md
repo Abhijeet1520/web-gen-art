@@ -1,5 +1,6 @@
 # Stable Diffusion Texture Transformer
 
+[Demo Video](https://www.loom.com/share/b69e810249f74adab25185a8037b67e5?sid=60a01caa-e0ec-4c43-9258-9a3612a7cf0b)
 [![Demo](./images/demo.png)](https://texture-transformer.abhi1520.com/)
 
 A real-time web application that transforms room textures and environments using Stable Diffusion image-to-image models. Take a photo of your surroundings and instantly transform them into different styles, themes, and textures.
